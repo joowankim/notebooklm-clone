@@ -3,7 +3,6 @@
 from dependency_injector import containers, providers
 
 from src.chunk.adapter.embedding.openai_embedding import OpenAIEmbeddingProvider
-from src.chunk.adapter.repository import ChunkRepository
 from src.document.adapter.extractor.composite import CompositeExtractor
 from src.document.adapter.repository import DocumentRepository
 from src.document.handler import handlers
@@ -35,16 +34,13 @@ class DocumentServiceContainer(containers.DeclarativeContainer):
     """Container for document services."""
 
     adapter = providers.DependenciesContainer()
-    chunk_adapter = providers.DependenciesContainer()
 
     chunking_service = providers.Singleton(ChunkingService)
 
     embedding_provider = providers.Singleton(OpenAIEmbeddingProvider)
 
-    ingestion_pipeline = providers.Factory(
+    ingestion_pipeline = providers.Singleton(
         IngestionPipeline,
-        document_repository=adapter.repository,
-        chunk_repository=chunk_adapter.repository,
         content_extractor=adapter.content_extractor,
         embedding_provider=embedding_provider,
         chunking_service=chunking_service,
@@ -87,7 +83,6 @@ class DocumentContainer(containers.DeclarativeContainer):
 
     db_session = providers.Dependency()
     notebook_adapter = providers.DependenciesContainer()
-    chunk_adapter = providers.DependenciesContainer()
 
     adapter = providers.Container(
         DocumentAdapterContainer,
@@ -97,7 +92,6 @@ class DocumentContainer(containers.DeclarativeContainer):
     service = providers.Container(
         DocumentServiceContainer,
         adapter=adapter,
-        chunk_adapter=chunk_adapter,
     )
 
     handler = providers.Container(

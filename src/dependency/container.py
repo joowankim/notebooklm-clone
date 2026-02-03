@@ -31,7 +31,6 @@ class ApplicationContainer(containers.DeclarativeContainer):
         DocumentContainer,
         db_session=db_session,
         notebook_adapter=notebook.adapter,
-        chunk_adapter=chunk.adapter,
     )
 
     query = providers.Container(

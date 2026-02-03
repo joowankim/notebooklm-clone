@@ -3,9 +3,9 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src import exceptions
 from src.chunk.entrypoint import api as chunk_api
@@ -38,18 +38,23 @@ app = FastAPI(
 )
 
 
-# Dependency to get session and wire container
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session for request."""
-    async with async_session_factory() as session:
-        # Wire session to container for this request
-        with container.db_session.override(session):
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
+# Database session middleware
+class DBSessionMiddleware(BaseHTTPMiddleware):
+    """Middleware to inject database session into container."""
+
+    async def dispatch(self, request: Request, call_next):
+        async with async_session_factory() as session:
+            with container.db_session.override(session):
+                try:
+                    response = await call_next(request)
+                    await session.commit()
+                    return response
+                except Exception:
+                    await session.rollback()
+                    raise
+
+
+app.add_middleware(DBSessionMiddleware)
 
 
 # Wire container
@@ -93,6 +98,17 @@ async def invalid_state_handler(
     )
 
 
+@app.exception_handler(exceptions.ExternalServiceError)
+async def external_service_handler(
+    request: Request, exc: exceptions.ExternalServiceError
+) -> JSONResponse:
+    """Handle external service errors."""
+    return JSONResponse(
+        status_code=502,
+        content={"detail": exc.message},
+    )
+
+
 # Health check
 @app.get("/health")
 async def health_check() -> dict:
@@ -100,30 +116,9 @@ async def health_check() -> dict:
     return {"status": "healthy"}
 
 
-# API router
-api_router = FastAPI(title="API v1")
-
-
-# Include domain routers with session dependency
-@api_router.middleware("http")
-async def db_session_middleware(request: Request, call_next):
-    """Middleware to inject database session."""
-    async with async_session_factory() as session:
-        with container.db_session.override(session):
-            try:
-                response = await call_next(request)
-                await session.commit()
-                return response
-            except Exception:
-                await session.rollback()
-                raise
-
-
-api_router.include_router(notebook_api.router)
-api_router.include_router(document_api.router)
-api_router.include_router(document_api.document_router)
-api_router.include_router(chunk_api.router)
-api_router.include_router(query_api.router)
-
-# Mount API router
-app.mount("/api/v1", api_router)
+# Include routers under /api/v1 prefix
+app.include_router(notebook_api.router, prefix="/api/v1")
+app.include_router(document_api.router, prefix="/api/v1")
+app.include_router(document_api.document_router, prefix="/api/v1")
+app.include_router(chunk_api.router, prefix="/api/v1")
+app.include_router(query_api.router, prefix="/api/v1")
