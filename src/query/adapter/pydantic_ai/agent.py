@@ -24,12 +24,14 @@ class RAGAgent:
         self,
         question: str,
         retrieved_chunks: list[RetrievedChunk],
+        conversation_history: list[dict] | None = None,
     ) -> QueryAnswer:
         """Generate an answer with citations.
 
         Args:
             question: The user's question.
             retrieved_chunks: Retrieved chunks with document context.
+            conversation_history: Optional list of previous messages for multi-turn.
 
         Returns:
             QueryAnswer with answer text and citations.
@@ -54,9 +56,14 @@ class RAGAgent:
             })
             chunk_map[i] = retrieved
 
-        # Format the prompt
+        # Format the prompt (with or without conversation history)
         sources_text = prompts.format_sources(sources)
-        user_prompt = prompts.format_user_prompt(question, sources_text)
+        if conversation_history:
+            user_prompt = prompts.format_user_prompt_with_history(
+                question, sources_text, conversation_history
+            )
+        else:
+            user_prompt = prompts.format_user_prompt(question, sources_text)
 
         # Run the agent
         result = await self._agent.run(user_prompt)

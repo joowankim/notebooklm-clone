@@ -3,6 +3,7 @@
 from dependency_injector import containers, providers
 
 from src.chunk.dependency import ChunkContainer
+from src.conversation.dependency import ConversationContainer
 from src.document.dependency import DocumentContainer
 from src.notebook.dependency import NotebookContainer
 from src.query.dependency import QueryContainer
@@ -39,4 +40,12 @@ class ApplicationContainer(containers.DeclarativeContainer):
         notebook_adapter=notebook.adapter,
         chunk_adapter=chunk.adapter,
         document_adapter=document.adapter,
+    )
+
+    conversation = providers.Container(
+        ConversationContainer,
+        db_session=db_session,
+        notebook_repository=notebook.adapter.repository,
+        retrieval_service=query.service.retrieval_service,
+        rag_agent=query.adapter.rag_agent,
     )

@@ -5,10 +5,14 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src import exceptions
 from src.chunk.entrypoint import api as chunk_api
+from src.common.rate_limit import limiter
+from src.conversation.entrypoint import api as conversation_api
 from src.database import async_session_factory, close_db, init_db
 from src.dependency.container import ApplicationContainer
 from src.document.entrypoint import api as document_api
@@ -37,6 +41,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 # Database session middleware
 class DBSessionMiddleware(BaseHTTPMiddleware):
@@ -64,6 +72,7 @@ container.wire(
         "src.document.entrypoint.api",
         "src.chunk.entrypoint.api",
         "src.query.entrypoint.api",
+        "src.conversation.entrypoint.api",
     ]
 )
 
@@ -122,3 +131,4 @@ app.include_router(document_api.router, prefix="/api/v1")
 app.include_router(document_api.document_router, prefix="/api/v1")
 app.include_router(chunk_api.router, prefix="/api/v1")
 app.include_router(query_api.router, prefix="/api/v1")
+app.include_router(conversation_api.router, prefix="/api/v1")

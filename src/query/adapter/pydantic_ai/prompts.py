@@ -51,3 +51,42 @@ SOURCES:
 {sources_text}
 
 Remember: Use citations [1], [2], etc. for every factual claim. If the information is not in the sources, say so."""
+
+
+def format_conversation_context(conversation_history: list[dict]) -> str:
+    """Format conversation history for context.
+
+    Args:
+        conversation_history: List of dicts with 'role' and 'content' keys.
+
+    Returns:
+        Formatted conversation history string.
+    """
+    if not conversation_history:
+        return ""
+
+    parts = ["PREVIOUS CONVERSATION:"]
+    for msg in conversation_history:
+        role = msg["role"].upper()
+        content = msg["content"]
+        # Truncate long messages for context
+        if len(content) > 500:
+            content = content[:500] + "..."
+        parts.append(f"{role}: {content}")
+
+    parts.append("\nNow answer the current question:\n")
+    return "\n".join(parts)
+
+
+def format_user_prompt_with_history(
+    question: str, sources_text: str, conversation_history: list[dict]
+) -> str:
+    """Format the user prompt with conversation history and sources."""
+    history_context = format_conversation_context(conversation_history)
+
+    return f"""{history_context}Based on the following sources, answer this question: {question}
+
+SOURCES:
+{sources_text}
+
+Remember: Use citations [1], [2], etc. for every factual claim. If the information is not in the sources, say so."""
