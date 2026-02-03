@@ -1,0 +1,43 @@
+"""Application dependency injection container."""
+
+from dependency_injector import containers, providers
+
+from src.chunk.dependency import ChunkContainer
+from src.document.dependency import DocumentContainer
+from src.notebook.dependency import NotebookContainer
+from src.query.dependency import QueryContainer
+
+
+class ApplicationContainer(containers.DeclarativeContainer):
+    """Root application container."""
+
+    config = providers.Configuration()
+
+    # Database session - provided per request
+    db_session = providers.Dependency()
+
+    # Domain containers
+    notebook = providers.Container(
+        NotebookContainer,
+        db_session=db_session,
+    )
+
+    chunk = providers.Container(
+        ChunkContainer,
+        db_session=db_session,
+    )
+
+    document = providers.Container(
+        DocumentContainer,
+        db_session=db_session,
+        notebook_adapter=notebook.adapter,
+        chunk_adapter=chunk.adapter,
+    )
+
+    query = providers.Container(
+        QueryContainer,
+        db_session=db_session,
+        notebook_adapter=notebook.adapter,
+        chunk_adapter=chunk.adapter,
+        document_adapter=document.adapter,
+    )
