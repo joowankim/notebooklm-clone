@@ -1,17 +1,17 @@
 """Mapper between Chunk entity and ORM schema."""
 
-from src.chunk.domain.model import Chunk
-from src.infrastructure.models.chunk import ChunkSchema
+from src.chunk.domain import model
+from src.infrastructure.models import chunk as chunk_schema
 
 
 class ChunkMapper:
     """Maps between Chunk domain entity and ORM schema."""
 
     @staticmethod
-    def to_entity(record: ChunkSchema) -> Chunk:
+    def to_entity(record: chunk_schema.ChunkSchema) -> model.Chunk:
         """Convert ORM record to domain entity."""
         embedding = list(record.embedding) if record.embedding is not None else None
-        return Chunk(
+        return model.Chunk(
             id=record.id,
             document_id=record.document_id,
             content=record.content,
@@ -24,9 +24,9 @@ class ChunkMapper:
         )
 
     @staticmethod
-    def to_record(entity: Chunk) -> ChunkSchema:
+    def to_record(entity: model.Chunk) -> chunk_schema.ChunkSchema:
         """Convert domain entity to ORM record."""
-        return ChunkSchema(
+        return chunk_schema.ChunkSchema(
             id=entity.id,
             document_id=entity.document_id,
             content=entity.content,

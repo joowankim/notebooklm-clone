@@ -2,16 +2,13 @@
 
 from dependency_injector import containers, providers
 
-from src.chunk.adapter.embedding.openai_embedding import OpenAIEmbeddingProvider
-from src.document.adapter.extractor.composite import CompositeExtractor
-from src.document.adapter.repository import DocumentRepository
+from src.chunk.adapter.embedding import openai_embedding
+from src.document.adapter.extractor import composite
+from src.document.adapter import repository as document_repository_module
 from src.document.handler import handlers
-from src.document.service.chunking.service import ChunkingService
-from src.document.service.ingestion_pipeline import (
-    BackgroundIngestionService,
-    IngestionPipeline,
-)
-from src.settings import settings
+from src.document.service.chunking import service as chunking_service_module
+from src.document.service import ingestion_pipeline as ingestion_pipeline_module
+from src import settings as settings_module
 
 
 class DocumentAdapterContainer(containers.DeclarativeContainer):
@@ -20,13 +17,13 @@ class DocumentAdapterContainer(containers.DeclarativeContainer):
     db_session = providers.Dependency()
 
     repository = providers.Factory(
-        DocumentRepository,
+        document_repository_module.DocumentRepository,
         session=db_session,
     )
 
     content_extractor = providers.Singleton(
-        CompositeExtractor,
-        jina_api_key=settings.jina_api_key,
+        composite.CompositeExtractor,
+        jina_api_key=settings_module.settings.jina_api_key,
     )
 
 
@@ -35,19 +32,19 @@ class DocumentServiceContainer(containers.DeclarativeContainer):
 
     adapter = providers.DependenciesContainer()
 
-    chunking_service = providers.Singleton(ChunkingService)
+    chunking_service = providers.Singleton(chunking_service_module.ChunkingService)
 
-    embedding_provider = providers.Singleton(OpenAIEmbeddingProvider)
+    embedding_provider = providers.Singleton(openai_embedding.OpenAIEmbeddingProvider)
 
     ingestion_pipeline = providers.Singleton(
-        IngestionPipeline,
+        ingestion_pipeline_module.IngestionPipeline,
         content_extractor=adapter.content_extractor,
         embedding_provider=embedding_provider,
         chunking_service=chunking_service,
     )
 
     background_ingestion = providers.Singleton(
-        BackgroundIngestionService,
+        ingestion_pipeline_module.BackgroundIngestionService,
         pipeline=ingestion_pipeline,
     )
 

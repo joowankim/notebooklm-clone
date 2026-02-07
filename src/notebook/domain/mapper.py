@@ -1,16 +1,16 @@
 """Mapper between Notebook entity and ORM schema."""
 
-from src.infrastructure.models.notebook import NotebookSchema
-from src.notebook.domain.model import Notebook
+from src.infrastructure.models import notebook as notebook_schema
+from src.notebook.domain import model
 
 
 class NotebookMapper:
     """Maps between Notebook domain entity and ORM schema."""
 
     @staticmethod
-    def to_entity(record: NotebookSchema) -> Notebook:
+    def to_entity(record: notebook_schema.NotebookSchema) -> model.Notebook:
         """Convert ORM record to domain entity."""
-        return Notebook(
+        return model.Notebook(
             id=record.id,
             name=record.name,
             description=record.description,
@@ -19,9 +19,9 @@ class NotebookMapper:
         )
 
     @staticmethod
-    def to_record(entity: Notebook) -> NotebookSchema:
+    def to_record(entity: model.Notebook) -> notebook_schema.NotebookSchema:
         """Convert domain entity to ORM record."""
-        return NotebookSchema(
+        return notebook_schema.NotebookSchema(
             id=entity.id,
             name=entity.name,
             description=entity.description,

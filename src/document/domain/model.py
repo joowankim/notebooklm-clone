@@ -7,7 +7,7 @@ from typing import Self
 import pydantic
 
 from src import exceptions
-from src.common.types import utc_now
+from src.common import types as common_types
 from src.document.domain.status import DocumentStatus
 
 
@@ -32,7 +32,7 @@ class Document(pydantic.BaseModel):
     @classmethod
     def create(cls, notebook_id: str, url: str, title: str | None = None) -> Self:
         """Factory method to create a new document in PENDING status."""
-        now = utc_now()
+        now = common_types.utc_now()
         return cls(
             id=uuid.uuid4().hex,
             notebook_id=notebook_id,
@@ -54,7 +54,7 @@ class Document(pydantic.BaseModel):
         return self.model_copy(
             update={
                 "status": DocumentStatus.PROCESSING,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )
 
@@ -70,7 +70,7 @@ class Document(pydantic.BaseModel):
                 "title": title if title is not None else self.title,
                 "content_hash": content_hash,
                 "error_message": None,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )
 
@@ -84,7 +84,7 @@ class Document(pydantic.BaseModel):
             update={
                 "status": DocumentStatus.FAILED,
                 "error_message": error_message,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )
 
@@ -98,6 +98,6 @@ class Document(pydantic.BaseModel):
             update={
                 "status": DocumentStatus.PENDING,
                 "error_message": None,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )

@@ -4,7 +4,7 @@ import abc
 from typing import Generic, TypeVar
 
 import sqlalchemy
-from sqlalchemy.ext.asyncio import AsyncSession
+import sqlalchemy.ext.asyncio
 
 T = TypeVar("T")
 S = TypeVar("S")
@@ -17,7 +17,7 @@ class SQLAlchemyRepository(abc.ABC, Generic[T, S]):
     S: SQLAlchemy schema (ORM model) type
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: sqlalchemy.ext.asyncio.AsyncSession) -> None:
         self._session = session
 
     @property

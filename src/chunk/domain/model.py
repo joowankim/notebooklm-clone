@@ -6,7 +6,7 @@ from typing import Self
 
 import pydantic
 
-from src.common.types import utc_now
+from src.common import types as common_types
 
 
 class Chunk(pydantic.BaseModel):
@@ -48,7 +48,7 @@ class Chunk(pydantic.BaseModel):
             chunk_index=chunk_index,
             token_count=token_count,
             embedding=embedding,
-            created_at=utc_now(),
+            created_at=common_types.utc_now(),
         )
 
     def with_embedding(self, embedding: list[float]) -> Self:

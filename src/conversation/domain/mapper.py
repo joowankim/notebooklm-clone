@@ -2,20 +2,20 @@
 
 import json
 
-from src.conversation.domain.model import Conversation, Message, MessageRole
-from src.infrastructure.models.conversation import ConversationSchema, MessageSchema
+from src.conversation.domain import model
+from src.infrastructure.models import conversation as conversation_schema
 
 
 class ConversationMapper:
     """Maps between Conversation domain entity and ORM schema."""
 
     @staticmethod
-    def to_entity(record: ConversationSchema) -> Conversation:
+    def to_entity(record: conversation_schema.ConversationSchema) -> model.Conversation:
         """Convert ORM record to domain entity."""
         messages = tuple(
-            Message(
+            model.Message(
                 id=msg.id,
-                role=MessageRole(msg.role),
+                role=model.MessageRole(msg.role),
                 content=msg.content,
                 citations=json.loads(msg.citations) if msg.citations else None,
                 created_at=msg.created_at,
@@ -23,7 +23,7 @@ class ConversationMapper:
             for msg in sorted(record.messages, key=lambda m: m.created_at)
         )
 
-        return Conversation(
+        return model.Conversation(
             id=record.id,
             notebook_id=record.notebook_id,
             title=record.title,
@@ -33,9 +33,9 @@ class ConversationMapper:
         )
 
     @staticmethod
-    def to_record(entity: Conversation) -> ConversationSchema:
+    def to_record(entity: model.Conversation) -> conversation_schema.ConversationSchema:
         """Convert domain entity to ORM record."""
-        return ConversationSchema(
+        return conversation_schema.ConversationSchema(
             id=entity.id,
             notebook_id=entity.notebook_id,
             title=entity.title,
@@ -44,9 +44,9 @@ class ConversationMapper:
         )
 
     @staticmethod
-    def message_to_record(message: Message, conversation_id: str) -> MessageSchema:
+    def message_to_record(message: model.Message, conversation_id: str) -> conversation_schema.MessageSchema:
         """Convert Message to ORM record."""
-        return MessageSchema(
+        return conversation_schema.MessageSchema(
             id=message.id,
             conversation_id=conversation_id,
             role=message.role.value,

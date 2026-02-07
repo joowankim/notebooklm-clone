@@ -3,13 +3,16 @@
 import asyncio
 from typing import Optional
 
+import rich.console
+import rich.table
 import typer
-from rich.console import Console
-from rich.table import Table
 
-from src.cli.utils import get_session_context
+from src.cli import utils as cli_utils
+from src.common import pagination
+from src.notebook.adapter import repository as notebook_repository_module
+from src.notebook.domain import model
 
-console = Console()
+console = rich.console.Console()
 app = typer.Typer()
 
 
@@ -17,18 +20,15 @@ app = typer.Typer()
 def create_notebook(
     name: str = typer.Argument(..., help="Name of the notebook"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Description"),
-):
+) -> None:
     """Create a new notebook."""
     asyncio.run(_create_notebook(name, description))
 
 
-async def _create_notebook(name: str, description: Optional[str]):
-    from src.notebook.domain.model import Notebook
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
-        repository = NotebookRepository(session)
-        notebook = Notebook.create(name=name, description=description)
+async def _create_notebook(name: str, description: Optional[str]) -> None:
+    async with cli_utils.get_session_context() as session:
+        repository = notebook_repository_module.NotebookRepository(session)
+        notebook = model.Notebook.create(name=name, description=description)
         saved = await repository.save(notebook)
         await session.commit()
 
@@ -42,24 +42,21 @@ async def _create_notebook(name: str, description: Optional[str]):
 def list_notebooks(
     page: int = typer.Option(1, "--page", "-p", help="Page number"),
     size: int = typer.Option(10, "--size", "-s", help="Page size"),
-):
+) -> None:
     """List all notebooks."""
     asyncio.run(_list_notebooks(page, size))
 
 
-async def _list_notebooks(page: int, size: int):
-    from src.common import ListQuery
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
-        repository = NotebookRepository(session)
-        result = await repository.list(ListQuery(page=page, size=size))
+async def _list_notebooks(page: int, size: int) -> None:
+    async with cli_utils.get_session_context() as session:
+        repository = notebook_repository_module.NotebookRepository(session)
+        result = await repository.list(pagination.ListQuery(page=page, size=size))
 
         if not result.items:
             console.print("[yellow]No notebooks found.[/yellow]")
             return
 
-        table = Table(title="Notebooks")
+        table = rich.table.Table(title="Notebooks")
         table.add_column("ID", style="cyan")
         table.add_column("Name", style="green")
         table.add_column("Description")
@@ -80,16 +77,14 @@ async def _list_notebooks(page: int, size: int):
 @app.command("get")
 def get_notebook(
     notebook_id: str = typer.Argument(..., help="Notebook ID"),
-):
+) -> None:
     """Get notebook details."""
     asyncio.run(_get_notebook(notebook_id))
 
 
-async def _get_notebook(notebook_id: str):
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
-        repository = NotebookRepository(session)
+async def _get_notebook(notebook_id: str) -> None:
+    async with cli_utils.get_session_context() as session:
+        repository = notebook_repository_module.NotebookRepository(session)
         notebook = await repository.find_by_id(notebook_id)
 
         if notebook is None:
@@ -107,7 +102,7 @@ async def _get_notebook(notebook_id: str):
 def delete_notebook(
     notebook_id: str = typer.Argument(..., help="Notebook ID"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
-):
+) -> None:
     """Delete a notebook."""
     if not force:
         confirm = typer.confirm(f"Delete notebook {notebook_id}?")
@@ -118,11 +113,9 @@ def delete_notebook(
     asyncio.run(_delete_notebook(notebook_id))
 
 
-async def _delete_notebook(notebook_id: str):
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
-        repository = NotebookRepository(session)
+async def _delete_notebook(notebook_id: str) -> None:
+    async with cli_utils.get_session_context() as session:
+        repository = notebook_repository_module.NotebookRepository(session)
         deleted = await repository.delete(notebook_id)
         await session.commit()
 

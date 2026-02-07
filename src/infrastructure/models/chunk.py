@@ -2,36 +2,36 @@
 
 import datetime
 
+import pgvector.sqlalchemy
 import sqlalchemy
-from pgvector.sqlalchemy import Vector
-from sqlalchemy.orm import Mapped, mapped_column
+import sqlalchemy.orm
 
-from src.database import Base
-from src.settings import settings
+from src import database as database_module
+from src import settings as settings_module
 
 
-class ChunkSchema(Base):
+class ChunkSchema(database_module.Base):
     """SQLAlchemy ORM model for document chunks with vector embeddings."""
 
     __tablename__ = "chunks"
 
-    id: Mapped[str] = mapped_column(sqlalchemy.String(32), primary_key=True)
-    document_id: Mapped[str] = mapped_column(
+    id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.String(32), primary_key=True)
+    document_id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(
         sqlalchemy.String(32),
         sqlalchemy.ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    content: Mapped[str] = mapped_column(sqlalchemy.Text, nullable=False)
-    char_start: Mapped[int] = mapped_column(sqlalchemy.Integer, nullable=False)
-    char_end: Mapped[int] = mapped_column(sqlalchemy.Integer, nullable=False)
-    chunk_index: Mapped[int] = mapped_column(sqlalchemy.Integer, nullable=False)
-    token_count: Mapped[int] = mapped_column(sqlalchemy.Integer, nullable=False)
-    embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(settings.embedding_dimensions),
+    content: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.Text, nullable=False)
+    char_start: sqlalchemy.orm.Mapped[int] = sqlalchemy.orm.mapped_column(sqlalchemy.Integer, nullable=False)
+    char_end: sqlalchemy.orm.Mapped[int] = sqlalchemy.orm.mapped_column(sqlalchemy.Integer, nullable=False)
+    chunk_index: sqlalchemy.orm.Mapped[int] = sqlalchemy.orm.mapped_column(sqlalchemy.Integer, nullable=False)
+    token_count: sqlalchemy.orm.Mapped[int] = sqlalchemy.orm.mapped_column(sqlalchemy.Integer, nullable=False)
+    embedding: sqlalchemy.orm.Mapped[list[float] | None] = sqlalchemy.orm.mapped_column(
+        pgvector.sqlalchemy.Vector(settings_module.settings.embedding_dimensions),
         nullable=True,
     )
-    created_at: Mapped[datetime.datetime] = mapped_column(
+    created_at: sqlalchemy.orm.Mapped[datetime.datetime] = sqlalchemy.orm.mapped_column(
         sqlalchemy.DateTime(timezone=True),
         nullable=False,
         server_default=sqlalchemy.func.now(),

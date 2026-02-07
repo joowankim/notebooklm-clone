@@ -2,7 +2,7 @@
 
 from dependency_injector import containers, providers
 
-from src.conversation.adapter.repository import ConversationRepository
+from src.conversation.adapter import repository as conversation_repository_module
 from src.conversation.handler import handlers
 
 
@@ -17,7 +17,7 @@ class ConversationContainer(containers.DeclarativeContainer):
 
     # Repository
     conversation_repository = providers.Factory(
-        ConversationRepository,
+        conversation_repository_module.ConversationRepository,
         session=db_session,
     )
 

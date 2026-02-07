@@ -3,34 +3,34 @@
 from collections.abc import AsyncGenerator
 
 import sqlalchemy
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+import sqlalchemy.ext.asyncio
+import sqlalchemy.orm
 
-from src.settings import settings
+from src import settings as settings_module
 
 
-class Base(DeclarativeBase):
+class Base(sqlalchemy.orm.DeclarativeBase):
     """Base class for all ORM models."""
 
     pass
 
 
 # Create async engine
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
+engine = sqlalchemy.ext.asyncio.create_async_engine(
+    settings_module.settings.database_url,
+    echo=settings_module.settings.debug,
     pool_pre_ping=True,
 )
 
 # Create session factory
-async_session_factory = async_sessionmaker(
+async_session_factory = sqlalchemy.ext.asyncio.async_sessionmaker(
     engine,
-    class_=AsyncSession,
+    class_=sqlalchemy.ext.asyncio.AsyncSession,
     expire_on_commit=False,
 )
 
 
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_session() -> AsyncGenerator[sqlalchemy.ext.asyncio.AsyncSession, None]:
     """Get database session."""
     async with async_session_factory() as session:
         try:

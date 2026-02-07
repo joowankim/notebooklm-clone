@@ -6,7 +6,7 @@ from typing import Self
 
 import pydantic
 
-from src.common.types import utc_now
+from src.common import types as common_types
 
 
 class Notebook(pydantic.BaseModel):
@@ -26,7 +26,7 @@ class Notebook(pydantic.BaseModel):
     @classmethod
     def create(cls, name: str, description: str | None = None) -> Self:
         """Factory method to create a new notebook."""
-        now = utc_now()
+        now = common_types.utc_now()
         return cls(
             id=uuid.uuid4().hex,
             name=name,
@@ -41,6 +41,6 @@ class Notebook(pydantic.BaseModel):
             update={
                 "name": name if name is not None else self.name,
                 "description": description if description is not None else self.description,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )

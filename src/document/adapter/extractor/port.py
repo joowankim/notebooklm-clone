@@ -2,14 +2,14 @@
 
 import abc
 
-from src.document.adapter.extractor.types import ExtractedContent
+from src.document.adapter.extractor import types as extractor_types
 
 
 class ContentExtractorPort(abc.ABC):
     """Abstract interface for content extraction."""
 
     @abc.abstractmethod
-    async def extract(self, url: str) -> ExtractedContent:
+    async def extract(self, url: str) -> extractor_types.ExtractedContent:
         """Extract content from a URL.
 
         Args:

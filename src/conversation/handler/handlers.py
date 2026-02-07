@@ -4,13 +4,13 @@ import datetime
 import uuid
 
 from src import exceptions
-from src.common import PaginationSchema
-from src.conversation.adapter.repository import ConversationRepository
-from src.conversation.domain.model import Conversation, Message, MessageRole
+from src.common import pagination
+from src.conversation.adapter import repository as conversation_repository_module
+from src.conversation.domain import model
 from src.conversation.schema import command, query, response
-from src.notebook.adapter.repository import NotebookRepository
-from src.query.adapter.pydantic_ai.agent import RAGAgent
-from src.query.service.retrieval import RetrievalService
+from src.notebook.adapter import repository as notebook_repository_module
+from src.query.adapter.pydantic_ai import agent as rag_agent_module
+from src.query.service import retrieval
 
 
 class CreateConversationHandler:
@@ -18,9 +18,9 @@ class CreateConversationHandler:
 
     def __init__(
         self,
-        notebook_repository: NotebookRepository,
-        conversation_repository: ConversationRepository,
-    ):
+        notebook_repository: notebook_repository_module.NotebookRepository,
+        conversation_repository: conversation_repository_module.ConversationRepository,
+    ) -> None:
         self._notebook_repository = notebook_repository
         self._conversation_repository = conversation_repository
 
@@ -34,7 +34,7 @@ class CreateConversationHandler:
             raise exceptions.NotFoundError(f"Notebook not found: {notebook_id}")
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        conversation = Conversation(
+        conversation = model.Conversation(
             id=uuid.uuid4().hex,
             notebook_id=notebook_id,
             title=cmd.title,
@@ -50,7 +50,7 @@ class CreateConversationHandler:
 class GetConversationHandler:
     """Handler for getting conversation details."""
 
-    def __init__(self, conversation_repository: ConversationRepository):
+    def __init__(self, conversation_repository: conversation_repository_module.ConversationRepository) -> None:
         self._conversation_repository = conversation_repository
 
     async def handle(self, conversation_id: str) -> response.ConversationDetail:
@@ -64,18 +64,18 @@ class GetConversationHandler:
 class ListConversationsHandler:
     """Handler for listing conversations."""
 
-    def __init__(self, conversation_repository: ConversationRepository):
+    def __init__(self, conversation_repository: conversation_repository_module.ConversationRepository) -> None:
         self._conversation_repository = conversation_repository
 
     async def handle(
         self, qry: query.ListConversations
-    ) -> PaginationSchema[response.ConversationDetail]:
+    ) -> pagination.PaginationSchema[response.ConversationDetail]:
         """List conversations for a notebook with pagination."""
         result = await self._conversation_repository.list_by_notebook(
             notebook_id=qry.notebook_id,
             query=qry,
         )
-        return PaginationSchema(
+        return pagination.PaginationSchema(
             items=[response.ConversationDetail.from_model(c) for c in result.items],
             total=result.total,
             page=result.page,
@@ -87,7 +87,7 @@ class ListConversationsHandler:
 class DeleteConversationHandler:
     """Handler for deleting a conversation."""
 
-    def __init__(self, conversation_repository: ConversationRepository):
+    def __init__(self, conversation_repository: conversation_repository_module.ConversationRepository) -> None:
         self._conversation_repository = conversation_repository
 
     async def handle(self, conversation_id: str) -> None:
@@ -102,10 +102,10 @@ class SendMessageHandler:
 
     def __init__(
         self,
-        conversation_repository: ConversationRepository,
-        retrieval_service: RetrievalService,
-        rag_agent: RAGAgent,
-    ):
+        conversation_repository: conversation_repository_module.ConversationRepository,
+        retrieval_service: retrieval.RetrievalService,
+        rag_agent: rag_agent_module.RAGAgent,
+    ) -> None:
         self._conversation_repository = conversation_repository
         self._retrieval_service = retrieval_service
         self._rag_agent = rag_agent
@@ -130,9 +130,9 @@ class SendMessageHandler:
         now = datetime.datetime.now(datetime.timezone.utc)
 
         # Create user message
-        user_message = Message(
+        user_message = model.Message(
             id=uuid.uuid4().hex,
-            role=MessageRole.USER,
+            role=model.MessageRole.USER,
             content=cmd.content,
             citations=None,
             created_at=now,
@@ -164,9 +164,9 @@ class SendMessageHandler:
         )
 
         # Create assistant message
-        assistant_message = Message(
+        assistant_message = model.Message(
             id=uuid.uuid4().hex,
-            role=MessageRole.ASSISTANT,
+            role=model.MessageRole.ASSISTANT,
             content=answer.answer,
             citations=[c.model_dump() for c in answer.citations] if answer.citations else None,
             created_at=datetime.datetime.now(datetime.timezone.utc),

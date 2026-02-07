@@ -3,15 +3,15 @@
 import logging
 
 from src import exceptions
-from src.document.adapter.extractor.jina import JinaReaderExtractor
-from src.document.adapter.extractor.port import ContentExtractorPort
-from src.document.adapter.extractor.trafilatura_extractor import TrafilaturaExtractor
-from src.document.adapter.extractor.types import ExtractedContent
+from src.document.adapter.extractor import jina as jina_module
+from src.document.adapter.extractor import port as extractor_port
+from src.document.adapter.extractor import trafilatura_extractor as trafilatura_module
+from src.document.adapter.extractor import types as extractor_types
 
 logger = logging.getLogger(__name__)
 
 
-class CompositeExtractor(ContentExtractorPort):
+class CompositeExtractor(extractor_port.ContentExtractorPort):
     """Composite extractor that tries multiple extractors with fallback.
 
     Order of preference:
@@ -23,19 +23,19 @@ class CompositeExtractor(ContentExtractorPort):
         self,
         jina_api_key: str | None = None,
         timeout: float = 30.0,
-    ):
-        self._extractors: list[ContentExtractorPort] = []
+    ) -> None:
+        self._extractors: list[extractor_port.ContentExtractorPort] = []
 
         # Add Jina Reader if API key is available
         if jina_api_key:
             self._extractors.append(
-                JinaReaderExtractor(api_key=jina_api_key, timeout=timeout)
+                jina_module.JinaReaderExtractor(api_key=jina_api_key, timeout=timeout)
             )
 
         # Always add Trafilatura as fallback
-        self._extractors.append(TrafilaturaExtractor(timeout=timeout))
+        self._extractors.append(trafilatura_module.TrafilaturaExtractor(timeout=timeout))
 
-    async def extract(self, url: str) -> ExtractedContent:
+    async def extract(self, url: str) -> extractor_types.ExtractedContent:
         """Extract content using available extractors with fallback."""
         errors: list[str] = []
 

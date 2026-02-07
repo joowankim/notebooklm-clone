@@ -1,10 +1,10 @@
 """Query command and query handlers."""
 
 from src import exceptions
-from src.notebook.adapter.repository import NotebookRepository
-from src.query.adapter.pydantic_ai.agent import RAGAgent
+from src.notebook.adapter import repository as notebook_repository_module
+from src.query.adapter.pydantic_ai import agent as rag_agent_module
 from src.query.schema import command, response
-from src.query.service.retrieval import RetrievalService
+from src.query.service import retrieval
 
 
 class QueryNotebookHandler:
@@ -12,10 +12,10 @@ class QueryNotebookHandler:
 
     def __init__(
         self,
-        notebook_repository: NotebookRepository,
-        retrieval_service: RetrievalService,
-        rag_agent: RAGAgent,
-    ):
+        notebook_repository: notebook_repository_module.NotebookRepository,
+        retrieval_service: retrieval.RetrievalService,
+        rag_agent: rag_agent_module.RAGAgent,
+    ) -> None:
         self._notebook_repository = notebook_repository
         self._retrieval_service = retrieval_service
         self._rag_agent = rag_agent

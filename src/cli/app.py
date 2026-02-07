@@ -1,11 +1,11 @@
 """CLI application entry point."""
 
 import typer
-from rich.console import Console
+import rich.console
 
 from src.cli.commands import conversation, notebook, query, source
 
-console = Console()
+console = rich.console.Console()
 
 app = typer.Typer(
     name="ntlm",
@@ -21,7 +21,7 @@ app.add_typer(conversation.app, name="conversation", help="Manage conversations"
 
 
 @app.callback()
-def main():
+def main() -> None:
     """NotebookLM Clone CLI."""
     pass
 

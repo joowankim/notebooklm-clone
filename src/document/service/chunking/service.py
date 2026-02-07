@@ -2,8 +2,8 @@
 
 import tiktoken
 
-from src.document.service.chunking.types import ChunkedContent
-from src.settings import settings
+from src.document.service.chunking import types as chunking_types
+from src import settings as settings_module
 
 
 class ChunkingService:
@@ -18,12 +18,12 @@ class ChunkingService:
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
         encoding_name: str = "cl100k_base",
-    ):
-        self._chunk_size = chunk_size or settings.chunk_size
-        self._chunk_overlap = chunk_overlap or settings.chunk_overlap
+    ) -> None:
+        self._chunk_size = chunk_size or settings_module.settings.chunk_size
+        self._chunk_overlap = chunk_overlap or settings_module.settings.chunk_overlap
         self._encoding = tiktoken.get_encoding(encoding_name)
 
-    def chunk(self, content: str) -> list[ChunkedContent]:
+    def chunk(self, content: str) -> list[chunking_types.ChunkedContent]:
         """Split content into chunks with accurate position tracking.
 
         CRITICAL: Each chunk's char_start and char_end MUST be accurate.
@@ -38,7 +38,7 @@ class ChunkingService:
         if not content.strip():
             return []
 
-        chunks: list[ChunkedContent] = []
+        chunks: list[chunking_types.ChunkedContent] = []
 
         # Split into sentences/paragraphs for natural boundaries
         segments = self._split_into_segments(content)
@@ -144,13 +144,13 @@ class ChunkingService:
 
     def _create_chunk(
         self, content: str, char_start: int, chunk_index: int
-    ) -> ChunkedContent:
+    ) -> chunking_types.ChunkedContent:
         """Create a ChunkedContent with accurate position information."""
         # Strip trailing whitespace but preserve leading
         stripped_content = content.rstrip()
         token_count = len(self._encoding.encode(stripped_content))
 
-        return ChunkedContent(
+        return chunking_types.ChunkedContent(
             content=stripped_content,
             char_start=char_start,
             char_end=char_start + len(stripped_content),

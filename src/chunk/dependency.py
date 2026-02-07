@@ -2,8 +2,8 @@
 
 from dependency_injector import containers, providers
 
-from src.chunk.adapter.embedding.openai_embedding import OpenAIEmbeddingProvider
-from src.chunk.adapter.repository import ChunkRepository
+from src.chunk.adapter.embedding import openai_embedding
+from src.chunk.adapter import repository as chunk_repository_module
 from src.chunk.handler import handlers
 
 
@@ -13,11 +13,11 @@ class ChunkAdapterContainer(containers.DeclarativeContainer):
     db_session = providers.Dependency()
 
     repository = providers.Factory(
-        ChunkRepository,
+        chunk_repository_module.ChunkRepository,
         session=db_session,
     )
 
-    embedding_provider = providers.Singleton(OpenAIEmbeddingProvider)
+    embedding_provider = providers.Singleton(openai_embedding.OpenAIEmbeddingProvider)
 
 
 class ChunkHandlerContainer(containers.DeclarativeContainer):

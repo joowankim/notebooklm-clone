@@ -1,21 +1,21 @@
 """Notebook command and query handlers."""
 
 from src import exceptions
-from src.common import PaginationSchema
-from src.notebook.adapter.repository import NotebookRepository
-from src.notebook.domain.model import Notebook
+from src.common import pagination
+from src.notebook.adapter import repository as notebook_repository_module
+from src.notebook.domain import model
 from src.notebook.schema import command, query, response
 
 
 class CreateNotebookHandler:
     """Handler for creating notebooks."""
 
-    def __init__(self, repository: NotebookRepository):
+    def __init__(self, repository: notebook_repository_module.NotebookRepository) -> None:
         self._repository = repository
 
     async def handle(self, cmd: command.CreateNotebook) -> response.NotebookId:
         """Create a new notebook."""
-        notebook = Notebook.create(name=cmd.name, description=cmd.description)
+        notebook = model.Notebook.create(name=cmd.name, description=cmd.description)
         saved = await self._repository.save(notebook)
         return response.NotebookId(id=saved.id)
 
@@ -23,7 +23,7 @@ class CreateNotebookHandler:
 class GetNotebookHandler:
     """Handler for getting notebook details."""
 
-    def __init__(self, repository: NotebookRepository):
+    def __init__(self, repository: notebook_repository_module.NotebookRepository) -> None:
         self._repository = repository
 
     async def handle(self, notebook_id: str) -> response.NotebookDetail:
@@ -37,15 +37,15 @@ class GetNotebookHandler:
 class ListNotebooksHandler:
     """Handler for listing notebooks."""
 
-    def __init__(self, repository: NotebookRepository):
+    def __init__(self, repository: notebook_repository_module.NotebookRepository) -> None:
         self._repository = repository
 
     async def handle(
         self, qry: query.ListNotebooks
-    ) -> PaginationSchema[response.NotebookDetail]:
+    ) -> pagination.PaginationSchema[response.NotebookDetail]:
         """List notebooks with pagination."""
         result = await self._repository.list(qry)
-        return PaginationSchema.create(
+        return pagination.PaginationSchema.create(
             items=[response.NotebookDetail.from_entity(item) for item in result.items],
             total=result.total,
             page=result.page,
@@ -56,7 +56,7 @@ class ListNotebooksHandler:
 class UpdateNotebookHandler:
     """Handler for updating notebooks."""
 
-    def __init__(self, repository: NotebookRepository):
+    def __init__(self, repository: notebook_repository_module.NotebookRepository) -> None:
         self._repository = repository
 
     async def handle(
@@ -75,7 +75,7 @@ class UpdateNotebookHandler:
 class DeleteNotebookHandler:
     """Handler for deleting notebooks."""
 
-    def __init__(self, repository: NotebookRepository):
+    def __init__(self, repository: notebook_repository_module.NotebookRepository) -> None:
         self._repository = repository
 
     async def handle(self, notebook_id: str) -> None:

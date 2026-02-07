@@ -5,7 +5,7 @@ from typing import Self
 
 import pydantic
 
-from src.chunk.domain.model import Chunk
+from src.chunk.domain import model
 
 
 class ChunkDetail(pydantic.BaseModel):
@@ -21,7 +21,7 @@ class ChunkDetail(pydantic.BaseModel):
     created_at: datetime.datetime
 
     @classmethod
-    def from_entity(cls, entity: Chunk) -> Self:
+    def from_entity(cls, entity: model.Chunk) -> Self:
         """Create response from domain entity."""
         return cls(
             id=entity.id,
@@ -42,7 +42,7 @@ class ChunkWithScore(pydantic.BaseModel):
     score: float
 
     @classmethod
-    def from_entity_and_score(cls, entity: Chunk, score: float) -> Self:
+    def from_entity_and_score(cls, entity: model.Chunk, score: float) -> Self:
         """Create from entity and score."""
         return cls(
             chunk=ChunkDetail.from_entity(entity),

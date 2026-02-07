@@ -1,17 +1,17 @@
 """Mapper between Document entity and ORM schema."""
 
-from src.document.domain.model import Document
+from src.document.domain import model
 from src.document.domain.status import DocumentStatus
-from src.infrastructure.models.document import DocumentSchema
+from src.infrastructure.models import document as document_schema
 
 
 class DocumentMapper:
     """Maps between Document domain entity and ORM schema."""
 
     @staticmethod
-    def to_entity(record: DocumentSchema) -> Document:
+    def to_entity(record: document_schema.DocumentSchema) -> model.Document:
         """Convert ORM record to domain entity."""
-        return Document(
+        return model.Document(
             id=record.id,
             notebook_id=record.notebook_id,
             url=record.url,
@@ -24,9 +24,9 @@ class DocumentMapper:
         )
 
     @staticmethod
-    def to_record(entity: Document) -> DocumentSchema:
+    def to_record(entity: model.Document) -> document_schema.DocumentSchema:
         """Convert domain entity to ORM record."""
-        return DocumentSchema(
+        return document_schema.DocumentSchema(
             id=entity.id,
             notebook_id=entity.notebook_id,
             url=entity.url,

@@ -1,9 +1,9 @@
 """Document status enum with state machine properties."""
 
-from enum import StrEnum
+import enum
 
 
-class DocumentStatus(StrEnum):
+class DocumentStatus(enum.StrEnum):
     """Document processing status."""
 
     PENDING = "pending"

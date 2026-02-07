@@ -1,28 +1,28 @@
 """Query REST API router."""
 
+import fastapi
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Request
 
-from src.common.rate_limit import QUERY_RATE, limiter
-from src.dependency.container import ApplicationContainer
+from src.common import rate_limit
+from src.dependency import container as container_module
 from src.query.handler import handlers
 from src.query.schema import command, response
 
-router = APIRouter(prefix="/notebooks/{notebook_id}/query", tags=["query"])
+router = fastapi.APIRouter(prefix="/notebooks/{notebook_id}/query", tags=["query"])
 
 
 @router.post(
     "",
     response_model=response.QueryAnswer,
 )
-@limiter.limit(QUERY_RATE)
+@rate_limit.limiter.limit(rate_limit.QUERY_RATE)
 @inject
 async def query_notebook(
-    request: Request,
+    request: fastapi.Request,
     notebook_id: str,
     cmd: command.QueryNotebook,
-    handler: handlers.QueryNotebookHandler = Depends(
-        Provide[ApplicationContainer.query.handler.query_notebook_handler]
+    handler: handlers.QueryNotebookHandler = fastapi.Depends(
+        Provide[container_module.ApplicationContainer.query.handler.query_notebook_handler]
     ),
 ) -> response.QueryAnswer:
     """Query a notebook with RAG and get an answer with citations."""

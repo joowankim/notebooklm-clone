@@ -1,12 +1,12 @@
 """Document command and query handlers."""
 
 from src import exceptions
-from src.common import PaginationSchema
-from src.document.adapter.repository import DocumentRepository
-from src.document.domain.model import Document
+from src.common import pagination
+from src.document.adapter import repository as document_repository_module
+from src.document.domain import model
 from src.document.schema import command, query, response
-from src.document.service.ingestion_pipeline import BackgroundIngestionService
-from src.notebook.adapter.repository import NotebookRepository
+from src.document.service import ingestion_pipeline
+from src.notebook.adapter import repository as notebook_repository_module
 
 
 class AddSourceHandler:
@@ -14,10 +14,10 @@ class AddSourceHandler:
 
     def __init__(
         self,
-        document_repository: DocumentRepository,
-        notebook_repository: NotebookRepository,
-        background_ingestion: BackgroundIngestionService,
-    ):
+        document_repository: document_repository_module.DocumentRepository,
+        notebook_repository: notebook_repository_module.NotebookRepository,
+        background_ingestion: ingestion_pipeline.BackgroundIngestionService,
+    ) -> None:
         self._document_repository = document_repository
         self._notebook_repository = notebook_repository
         self._background_ingestion = background_ingestion
@@ -42,7 +42,7 @@ class AddSourceHandler:
             )
 
         # Create document
-        document = Document.create(
+        document = model.Document.create(
             notebook_id=notebook_id,
             url=url_str,
             title=cmd.title,
@@ -58,7 +58,7 @@ class AddSourceHandler:
 class GetDocumentHandler:
     """Handler for getting document details."""
 
-    def __init__(self, repository: DocumentRepository):
+    def __init__(self, repository: document_repository_module.DocumentRepository) -> None:
         self._repository = repository
 
     async def handle(self, document_id: str) -> response.DocumentDetail:
@@ -74,15 +74,15 @@ class ListSourcesHandler:
 
     def __init__(
         self,
-        document_repository: DocumentRepository,
-        notebook_repository: NotebookRepository,
-    ):
+        document_repository: document_repository_module.DocumentRepository,
+        notebook_repository: notebook_repository_module.NotebookRepository,
+    ) -> None:
         self._document_repository = document_repository
         self._notebook_repository = notebook_repository
 
     async def handle(
         self, qry: query.ListSources
-    ) -> PaginationSchema[response.DocumentDetail]:
+    ) -> pagination.PaginationSchema[response.DocumentDetail]:
         """List sources for a notebook with pagination."""
         # Verify notebook exists
         notebook = await self._notebook_repository.find_by_id(qry.notebook_id)
@@ -90,7 +90,7 @@ class ListSourcesHandler:
             raise exceptions.NotFoundError(f"Notebook not found: {qry.notebook_id}")
 
         result = await self._document_repository.list_by_notebook(qry.notebook_id, qry)
-        return PaginationSchema.create(
+        return pagination.PaginationSchema.create(
             items=[response.DocumentDetail.from_entity(item) for item in result.items],
             total=result.total,
             page=result.page,

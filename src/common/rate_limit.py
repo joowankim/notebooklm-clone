@@ -1,10 +1,10 @@
 """Rate limiting configuration."""
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+import slowapi
+import slowapi.util
 
 # Create limiter with IP-based key function
-limiter = Limiter(key_func=get_remote_address)
+limiter = slowapi.Limiter(key_func=slowapi.util.get_remote_address)
 
 # Rate limit constants
 DEFAULT_RATE = "100/minute"

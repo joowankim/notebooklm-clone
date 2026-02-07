@@ -3,37 +3,37 @@
 import datetime
 
 import sqlalchemy
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+import sqlalchemy.orm
 
-from src.database import Base
+from src import database as database_module
 
 
-class ConversationSchema(Base):
+class ConversationSchema(database_module.Base):
     """SQLAlchemy ORM model for conversations."""
 
     __tablename__ = "conversations"
 
-    id: Mapped[str] = mapped_column(sqlalchemy.String(32), primary_key=True)
-    notebook_id: Mapped[str] = mapped_column(
+    id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.String(32), primary_key=True)
+    notebook_id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(
         sqlalchemy.String(32),
         sqlalchemy.ForeignKey("notebooks.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    title: Mapped[str | None] = mapped_column(sqlalchemy.String(255), nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
+    title: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(sqlalchemy.String(255), nullable=True)
+    created_at: sqlalchemy.orm.Mapped[datetime.datetime] = sqlalchemy.orm.mapped_column(
         sqlalchemy.DateTime(timezone=True),
         nullable=False,
         server_default=sqlalchemy.func.now(),
     )
-    updated_at: Mapped[datetime.datetime] = mapped_column(
+    updated_at: sqlalchemy.orm.Mapped[datetime.datetime] = sqlalchemy.orm.mapped_column(
         sqlalchemy.DateTime(timezone=True),
         nullable=False,
         server_default=sqlalchemy.func.now(),
         onupdate=sqlalchemy.func.now(),
     )
 
-    messages: Mapped[list["MessageSchema"]] = relationship(
+    messages: sqlalchemy.orm.Mapped[list["MessageSchema"]] = sqlalchemy.orm.relationship(
         "MessageSchema",
         back_populates="conversation",
         cascade="all, delete-orphan",
@@ -41,28 +41,28 @@ class ConversationSchema(Base):
     )
 
 
-class MessageSchema(Base):
+class MessageSchema(database_module.Base):
     """SQLAlchemy ORM model for messages."""
 
     __tablename__ = "messages"
 
-    id: Mapped[str] = mapped_column(sqlalchemy.String(32), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(
+    id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.String(32), primary_key=True)
+    conversation_id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(
         sqlalchemy.String(32),
         sqlalchemy.ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    role: Mapped[str] = mapped_column(sqlalchemy.String(20), nullable=False)
-    content: Mapped[str] = mapped_column(sqlalchemy.Text, nullable=False)
-    citations: Mapped[str | None] = mapped_column(sqlalchemy.Text, nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
+    role: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.String(20), nullable=False)
+    content: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(sqlalchemy.Text, nullable=False)
+    citations: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(sqlalchemy.Text, nullable=True)
+    created_at: sqlalchemy.orm.Mapped[datetime.datetime] = sqlalchemy.orm.mapped_column(
         sqlalchemy.DateTime(timezone=True),
         nullable=False,
         server_default=sqlalchemy.func.now(),
     )
 
-    conversation: Mapped["ConversationSchema"] = relationship(
+    conversation: sqlalchemy.orm.Mapped["ConversationSchema"] = sqlalchemy.orm.relationship(
         "ConversationSchema",
         back_populates="messages",
     )

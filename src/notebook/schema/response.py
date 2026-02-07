@@ -5,7 +5,7 @@ from typing import Self
 
 import pydantic
 
-from src.notebook.domain.model import Notebook
+from src.notebook.domain import model
 
 
 class NotebookId(pydantic.BaseModel):
@@ -24,7 +24,7 @@ class NotebookDetail(pydantic.BaseModel):
     updated_at: datetime.datetime
 
     @classmethod
-    def from_entity(cls, entity: Notebook) -> Self:
+    def from_entity(cls, entity: model.Notebook) -> Self:
         """Create response from domain entity."""
         return cls(
             id=entity.id,

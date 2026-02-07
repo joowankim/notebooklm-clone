@@ -3,13 +3,17 @@
 import asyncio
 from typing import Optional
 
+import rich.console
+import rich.table
 import typer
-from rich.console import Console
-from rich.table import Table
 
-from src.cli.utils import get_session_context
+from src.cli import utils as cli_utils
+from src.common import pagination
+from src.document.adapter import repository as document_repository_module
+from src.document.domain import model as document_model
+from src.notebook.adapter import repository as notebook_repository_module
 
-console = Console()
+console = rich.console.Console()
 app = typer.Typer()
 
 
@@ -18,26 +22,22 @@ def add_source(
     notebook_id: str = typer.Argument(..., help="Notebook ID"),
     url: str = typer.Argument(..., help="Source URL"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Source title"),
-):
+) -> None:
     """Add a source URL to a notebook."""
     asyncio.run(_add_source(notebook_id, url, title))
 
 
-async def _add_source(notebook_id: str, url: str, title: Optional[str]):
-    from src.document.domain.model import Document
-    from src.document.adapter.repository import DocumentRepository
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
+async def _add_source(notebook_id: str, url: str, title: Optional[str]) -> None:
+    async with cli_utils.get_session_context() as session:
         # Verify notebook exists
-        notebook_repo = NotebookRepository(session)
+        notebook_repo = notebook_repository_module.NotebookRepository(session)
         notebook = await notebook_repo.find_by_id(notebook_id)
         if notebook is None:
             console.print(f"[red]Notebook not found:[/red] {notebook_id}")
             raise typer.Exit(1)
 
         # Check for duplicate
-        doc_repo = DocumentRepository(session)
+        doc_repo = document_repository_module.DocumentRepository(session)
         existing = await doc_repo.find_by_notebook_and_url(notebook_id, url)
         if existing is not None:
             console.print(f"[yellow]Source URL already exists:[/yellow] {url}")
@@ -45,7 +45,7 @@ async def _add_source(notebook_id: str, url: str, title: Optional[str]):
             raise typer.Exit(1)
 
         # Create document
-        document = Document.create(notebook_id=notebook_id, url=url, title=title)
+        document = document_model.Document.create(notebook_id=notebook_id, url=url, title=title)
         saved = await doc_repo.save(document)
         await session.commit()
 
@@ -60,34 +60,30 @@ def list_sources(
     notebook_id: str = typer.Argument(..., help="Notebook ID"),
     page: int = typer.Option(1, "--page", "-p", help="Page number"),
     size: int = typer.Option(10, "--size", "-s", help="Page size"),
-):
+) -> None:
     """List sources in a notebook."""
     asyncio.run(_list_sources(notebook_id, page, size))
 
 
-async def _list_sources(notebook_id: str, page: int, size: int):
-    from src.common import ListQuery
-    from src.document.adapter.repository import DocumentRepository
-    from src.notebook.adapter.repository import NotebookRepository
-
-    async with get_session_context() as session:
+async def _list_sources(notebook_id: str, page: int, size: int) -> None:
+    async with cli_utils.get_session_context() as session:
         # Verify notebook exists
-        notebook_repo = NotebookRepository(session)
+        notebook_repo = notebook_repository_module.NotebookRepository(session)
         notebook = await notebook_repo.find_by_id(notebook_id)
         if notebook is None:
             console.print(f"[red]Notebook not found:[/red] {notebook_id}")
             raise typer.Exit(1)
 
-        doc_repo = DocumentRepository(session)
+        doc_repo = document_repository_module.DocumentRepository(session)
         result = await doc_repo.list_by_notebook(
-            notebook_id, ListQuery(page=page, size=size)
+            notebook_id, pagination.ListQuery(page=page, size=size)
         )
 
         if not result.items:
             console.print("[yellow]No sources found.[/yellow]")
             return
 
-        table = Table(title=f"Sources in '{notebook.name}'")
+        table = rich.table.Table(title=f"Sources in '{notebook.name}'")
         table.add_column("ID", style="cyan")
         table.add_column("Title")
         table.add_column("URL", max_width=40)
@@ -117,16 +113,14 @@ async def _list_sources(notebook_id: str, page: int, size: int):
 @app.command("get")
 def get_source(
     document_id: str = typer.Argument(..., help="Document ID"),
-):
+) -> None:
     """Get source details."""
     asyncio.run(_get_source(document_id))
 
 
-async def _get_source(document_id: str):
-    from src.document.adapter.repository import DocumentRepository
-
-    async with get_session_context() as session:
-        repo = DocumentRepository(session)
+async def _get_source(document_id: str) -> None:
+    async with cli_utils.get_session_context() as session:
+        repo = document_repository_module.DocumentRepository(session)
         doc = await repo.find_by_id(document_id)
 
         if doc is None:

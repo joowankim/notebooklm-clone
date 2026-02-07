@@ -5,7 +5,7 @@ from typing import Self
 
 import pydantic
 
-from src.document.domain.model import Document
+from src.document.domain import model
 
 
 class DocumentId(pydantic.BaseModel):
@@ -27,7 +27,7 @@ class DocumentDetail(pydantic.BaseModel):
     updated_at: datetime.datetime
 
     @classmethod
-    def from_entity(cls, entity: Document) -> Self:
+    def from_entity(cls, entity: model.Document) -> Self:
         """Create response from domain entity."""
         return cls(
             id=entity.id,
