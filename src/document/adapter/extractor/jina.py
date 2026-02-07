@@ -3,25 +3,25 @@
 import httpx
 
 from src import exceptions
-from src.document.adapter.extractor.port import ContentExtractorPort
-from src.document.adapter.extractor.types import ExtractedContent
-from src.settings import settings
+from src.document.adapter.extractor import port as extractor_port
+from src.document.adapter.extractor import types as extractor_types
+from src import settings as settings_module
 
 
-class JinaReaderExtractor(ContentExtractorPort):
+class JinaReaderExtractor(extractor_port.ContentExtractorPort):
     """Content extractor using Jina Reader API.
 
     Jina Reader (r.jina.ai) converts URLs to clean markdown content.
     """
 
-    def __init__(self, api_key: str | None = None, timeout: float = 30.0):
-        self._api_key = api_key or settings.jina_api_key
+    def __init__(self, api_key: str | None = None, timeout: float = 30.0) -> None:
+        self._api_key = api_key or settings_module.settings.jina_api_key
         self._timeout = timeout
         self._base_url = "https://r.jina.ai"
 
-    async def extract(self, url: str) -> ExtractedContent:
+    async def extract(self, url: str) -> extractor_types.ExtractedContent:
         """Extract content from URL using Jina Reader."""
-        headers = {}
+        headers: dict[str, str] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
@@ -38,24 +38,24 @@ class JinaReaderExtractor(ContentExtractorPort):
                 # Try to extract title from first markdown heading
                 title = self._extract_title(content)
 
-                return ExtractedContent.create(
+                return extractor_types.ExtractedContent.create(
                     url=url,
                     title=title,
                     content=content,
                 )
 
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             raise exceptions.ExternalServiceError(
                 f"Jina Reader timeout for URL: {url}"
-            )
-        except httpx.HTTPStatusError as e:
+            ) from exc
+        except httpx.HTTPStatusError as exc:
             raise exceptions.ExternalServiceError(
-                f"Jina Reader HTTP error {e.response.status_code} for URL: {url}"
-            )
-        except httpx.RequestError as e:
+                f"Jina Reader HTTP error {exc.response.status_code} for URL: {url}"
+            ) from exc
+        except httpx.RequestError as exc:
             raise exceptions.ExternalServiceError(
-                f"Jina Reader request error for URL: {url}: {e}"
-            )
+                f"Jina Reader request error for URL: {url}: {exc}"
+            ) from exc
 
     def supports(self, url: str) -> bool:
         """Check if this extractor supports the URL."""

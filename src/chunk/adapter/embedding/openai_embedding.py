@@ -3,11 +3,11 @@
 import openai
 
 from src import exceptions
-from src.chunk.adapter.embedding.port import EmbeddingProviderPort
-from src.settings import settings
+from src.chunk.adapter.embedding import port as embedding_port
+from src import settings as settings_module
 
 
-class OpenAIEmbeddingProvider(EmbeddingProviderPort):
+class OpenAIEmbeddingProvider(embedding_port.EmbeddingProviderPort):
     """Embedding provider using OpenAI API."""
 
     def __init__(
@@ -15,10 +15,10 @@ class OpenAIEmbeddingProvider(EmbeddingProviderPort):
         api_key: str | None = None,
         model: str | None = None,
         dimensions: int | None = None,
-    ):
-        self._api_key = api_key or settings.openai_api_key
-        self._model = model or settings.embedding_model
-        self._dimensions = dimensions or settings.embedding_dimensions
+    ) -> None:
+        self._api_key = api_key or settings_module.settings.openai_api_key
+        self._model = model or settings_module.settings.embedding_model
+        self._dimensions = dimensions or settings_module.settings.embedding_dimensions
         self._client = openai.AsyncOpenAI(api_key=self._api_key)
 
     async def embed(self, text: str) -> list[float]:
@@ -42,12 +42,12 @@ class OpenAIEmbeddingProvider(EmbeddingProviderPort):
             sorted_data = sorted(response.data, key=lambda x: x.index)
             return [item.embedding for item in sorted_data]
 
-        except openai.AuthenticationError:
-            raise exceptions.ExternalServiceError("OpenAI authentication failed")
-        except openai.RateLimitError:
-            raise exceptions.ExternalServiceError("OpenAI rate limit exceeded")
-        except openai.APIError as e:
-            raise exceptions.ExternalServiceError(f"OpenAI API error: {e}")
+        except openai.AuthenticationError as exc:
+            raise exceptions.ExternalServiceError("OpenAI authentication failed") from exc
+        except openai.RateLimitError as exc:
+            raise exceptions.ExternalServiceError("OpenAI rate limit exceeded") from exc
+        except openai.APIError as exc:
+            raise exceptions.ExternalServiceError(f"OpenAI API error: {exc}") from exc
 
     @property
     def dimensions(self) -> int:

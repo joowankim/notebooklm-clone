@@ -4,21 +4,21 @@ import httpx
 import trafilatura
 
 from src import exceptions
-from src.document.adapter.extractor.port import ContentExtractorPort
-from src.document.adapter.extractor.types import ExtractedContent
+from src.document.adapter.extractor import port as extractor_port
+from src.document.adapter.extractor import types as extractor_types
 
 
-class TrafilaturaExtractor(ContentExtractorPort):
+class TrafilaturaExtractor(extractor_port.ContentExtractorPort):
     """Content extractor using Trafilatura library.
 
     Trafilatura is a Python library for web scraping and text extraction.
     It's used as a fallback when Jina Reader is unavailable.
     """
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0) -> None:
         self._timeout = timeout
 
-    async def extract(self, url: str) -> ExtractedContent:
+    async def extract(self, url: str) -> extractor_types.ExtractedContent:
         """Extract content from URL using Trafilatura."""
         try:
             # Fetch the HTML content
@@ -36,16 +36,16 @@ class TrafilaturaExtractor(ContentExtractorPort):
                 response.raise_for_status()
                 html_content = response.text
 
-        except httpx.TimeoutException:
-            raise exceptions.ExternalServiceError(f"Request timeout for URL: {url}")
-        except httpx.HTTPStatusError as e:
+        except httpx.TimeoutException as exc:
+            raise exceptions.ExternalServiceError(f"Request timeout for URL: {url}") from exc
+        except httpx.HTTPStatusError as exc:
             raise exceptions.ExternalServiceError(
-                f"HTTP error {e.response.status_code} for URL: {url}"
-            )
-        except httpx.RequestError as e:
+                f"HTTP error {exc.response.status_code} for URL: {url}"
+            ) from exc
+        except httpx.RequestError as exc:
             raise exceptions.ExternalServiceError(
-                f"Request error for URL: {url}: {e}"
-            )
+                f"Request error for URL: {url}: {exc}"
+            ) from exc
 
         # Extract content using trafilatura
         content = trafilatura.extract(
@@ -65,7 +65,7 @@ class TrafilaturaExtractor(ContentExtractorPort):
         metadata = trafilatura.extract_metadata(html_content)
         title = metadata.title if metadata else None
 
-        return ExtractedContent.create(
+        return extractor_types.ExtractedContent.create(
             url=url,
             title=title,
             content=content,
