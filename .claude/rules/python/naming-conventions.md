@@ -1,0 +1,1 @@
+/Users/kimjoowan/projects/ntlm-clone/.claude/rules-storage/python/bootstrap/naming-conventions.md
