@@ -1,40 +1,41 @@
 """FastAPI application entry point."""
 
-from contextlib import asynccontextmanager
+import contextlib
+import http
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from starlette.middleware.base import BaseHTTPMiddleware
+import fastapi
+import fastapi.responses
+import slowapi
+import slowapi.errors
+import starlette.middleware.base
 
 from src import exceptions
 from src.chunk.entrypoint import api as chunk_api
-from src.common.rate_limit import limiter
+from src.common import rate_limit
 from src.conversation.entrypoint import api as conversation_api
-from src.database import async_session_factory, close_db, init_db
-from src.dependency.container import ApplicationContainer
+from src import database as database_module
+from src.dependency import container as container_module
 from src.document.entrypoint import api as document_api
 from src.notebook.entrypoint import api as notebook_api
 from src.query.entrypoint import api as query_api
 
 # Create container
-container = ApplicationContainer()
+container = container_module.ApplicationContainer()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     # Startup
-    await init_db()
+    await database_module.init_db()
     yield
     # Shutdown
-    await close_db()
+    await database_module.close_db()
 
 
 # Create FastAPI app
-app = FastAPI(
+app = fastapi.FastAPI(
     title="NotebookLM Clone",
     description="Document Research System with RAG",
     version="0.1.0",
@@ -42,16 +43,21 @@ app = FastAPI(
 )
 
 # Add rate limiter
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.state.limiter = rate_limit.limiter
+app.add_exception_handler(
+    slowapi.errors.RateLimitExceeded,
+    slowapi._rate_limit_exceeded_handler,
+)
 
 
 # Database session middleware
-class DBSessionMiddleware(BaseHTTPMiddleware):
+class DBSessionMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
     """Middleware to inject database session into container."""
 
-    async def dispatch(self, request: Request, call_next):
-        async with async_session_factory() as session:
+    async def dispatch(
+        self, request: fastapi.Request, call_next: starlette.middleware.base.RequestResponseEndpoint
+    ) -> fastapi.responses.Response:
+        async with database_module.async_session_factory() as session:
             with container.db_session.override(session):
                 try:
                     response = await call_next(request)
@@ -79,48 +85,52 @@ container.wire(
 
 # Exception handlers
 @app.exception_handler(exceptions.NotFoundError)
-async def not_found_handler(request: Request, exc: exceptions.NotFoundError) -> JSONResponse:
+async def not_found_handler(
+    request: fastapi.Request, exc: exceptions.NotFoundError
+) -> fastapi.responses.JSONResponse:
     """Handle not found errors."""
-    return JSONResponse(
-        status_code=404,
+    return fastapi.responses.JSONResponse(
+        status_code=http.HTTPStatus.NOT_FOUND,
         content={"detail": exc.message},
     )
 
 
 @app.exception_handler(exceptions.ValidationError)
-async def validation_handler(request: Request, exc: exceptions.ValidationError) -> JSONResponse:
+async def validation_handler(
+    request: fastapi.Request, exc: exceptions.ValidationError
+) -> fastapi.responses.JSONResponse:
     """Handle validation errors."""
-    return JSONResponse(
-        status_code=400,
+    return fastapi.responses.JSONResponse(
+        status_code=http.HTTPStatus.BAD_REQUEST,
         content={"detail": exc.message},
     )
 
 
 @app.exception_handler(exceptions.InvalidStateError)
 async def invalid_state_handler(
-    request: Request, exc: exceptions.InvalidStateError
-) -> JSONResponse:
+    request: fastapi.Request, exc: exceptions.InvalidStateError
+) -> fastapi.responses.JSONResponse:
     """Handle invalid state transition errors."""
-    return JSONResponse(
-        status_code=409,
+    return fastapi.responses.JSONResponse(
+        status_code=http.HTTPStatus.CONFLICT,
         content={"detail": exc.message},
     )
 
 
 @app.exception_handler(exceptions.ExternalServiceError)
 async def external_service_handler(
-    request: Request, exc: exceptions.ExternalServiceError
-) -> JSONResponse:
+    request: fastapi.Request, exc: exceptions.ExternalServiceError
+) -> fastapi.responses.JSONResponse:
     """Handle external service errors."""
-    return JSONResponse(
-        status_code=502,
+    return fastapi.responses.JSONResponse(
+        status_code=http.HTTPStatus.BAD_GATEWAY,
         content={"detail": exc.message},
     )
 
 
 # Health check
 @app.get("/health")
-async def health_check() -> dict:
+async def health_check() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy"}
 
