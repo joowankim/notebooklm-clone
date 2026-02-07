@@ -1,5 +1,8 @@
 """Content extraction types."""
 
+import hashlib
+from typing import Self
+
 import pydantic
 
 
@@ -15,10 +18,8 @@ class ExtractedContent(pydantic.BaseModel):
     word_count: int
 
     @classmethod
-    def create(cls, url: str, title: str | None, content: str) -> "ExtractedContent":
+    def create(cls, url: str, title: str | None, content: str) -> Self:
         """Create ExtractedContent with computed fields."""
-        import hashlib
-
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         word_count = len(content.split())
 

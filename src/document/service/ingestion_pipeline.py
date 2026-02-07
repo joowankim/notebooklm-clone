@@ -3,14 +3,14 @@
 import asyncio
 import logging
 
-from src.chunk.adapter.embedding.port import EmbeddingProviderPort
-from src.chunk.adapter.repository import ChunkRepository
-from src.chunk.domain.model import Chunk
-from src.database import async_session_factory
-from src.document.adapter.extractor.port import ContentExtractorPort
-from src.document.adapter.repository import DocumentRepository
-from src.document.domain.model import Document
-from src.document.service.chunking.service import ChunkingService
+from src.chunk.adapter.embedding import port as embedding_port
+from src.chunk.adapter import repository as chunk_repository_module
+from src.chunk.domain import model as chunk_model
+from src import database as database_module
+from src.document.adapter.extractor import port as extractor_port
+from src.document.adapter import repository as document_repository_module
+from src.document.domain import model
+from src.document.service.chunking import service as chunking_service_module
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +27,17 @@ class IngestionPipeline:
 
     def __init__(
         self,
-        content_extractor: ContentExtractorPort,
-        embedding_provider: EmbeddingProviderPort,
-        chunking_service: ChunkingService,
+        content_extractor: extractor_port.ContentExtractorPort,
+        embedding_provider: embedding_port.EmbeddingProviderPort,
+        chunking_service: chunking_service_module.ChunkingService,
         batch_size: int = 10,
-    ):
+    ) -> None:
         self._content_extractor = content_extractor
         self._embedding_provider = embedding_provider
         self._chunking_service = chunking_service
         self._batch_size = batch_size
 
-    async def process(self, document_id: str) -> Document:
+    async def process(self, document_id: str) -> model.Document | None:
         """Process a document through the complete ingestion pipeline.
 
         Creates its own database session to work independently of request lifecycle.
@@ -48,9 +48,9 @@ class IngestionPipeline:
         Returns:
             Updated document with COMPLETED or FAILED status.
         """
-        async with async_session_factory() as session:
-            document_repository = DocumentRepository(session)
-            chunk_repository = ChunkRepository(session)
+        async with database_module.async_session_factory() as session:
+            document_repository = document_repository_module.DocumentRepository(session)
+            chunk_repository = chunk_repository_module.ChunkRepository(session)
 
             # Load document
             document = await document_repository.find_by_id(document_id)
@@ -75,7 +75,7 @@ class IngestionPipeline:
 
                 # Step 3: Create chunk entities
                 chunks = [
-                    Chunk.create(
+                    chunk_model.Chunk.create(
                         document_id=document.id,
                         content=c.content,
                         char_start=c.char_start,
@@ -122,12 +122,12 @@ class IngestionPipeline:
 
                 return document
 
-    async def _generate_embeddings(self, chunks: list[Chunk]) -> list[Chunk]:
+    async def _generate_embeddings(self, chunks: list[chunk_model.Chunk]) -> list[chunk_model.Chunk]:
         """Generate embeddings for chunks in batches."""
         if not chunks:
             return []
 
-        result: list[Chunk] = []
+        result: list[chunk_model.Chunk] = []
 
         # Process in batches
         for i in range(0, len(chunks), self._batch_size):
@@ -145,11 +145,11 @@ class IngestionPipeline:
 class BackgroundIngestionService:
     """Service for triggering background ingestion of documents."""
 
-    def __init__(self, pipeline: IngestionPipeline):
+    def __init__(self, pipeline: IngestionPipeline) -> None:
         self._pipeline = pipeline
-        self._tasks: dict[str, asyncio.Task] = {}
+        self._tasks: dict[str, asyncio.Task] = {}  # type: ignore[type-arg]
 
-    def trigger_ingestion(self, document: Document) -> None:
+    def trigger_ingestion(self, document: model.Document) -> None:
         """Trigger async ingestion for a document.
 
         Creates an asyncio task to process the document in the background.

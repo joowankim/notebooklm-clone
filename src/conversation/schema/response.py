@@ -1,7 +1,7 @@
 """Conversation response schemas."""
 
 import datetime
-from typing import Self
+from typing import Any, Self
 
 import pydantic
 
@@ -20,7 +20,7 @@ class MessageDetail(pydantic.BaseModel):
     id: str
     role: str
     content: str
-    citations: list[dict] | None = None
+    citations: list[dict[str, Any]] | None = None
     created_at: datetime.datetime
 
     @classmethod

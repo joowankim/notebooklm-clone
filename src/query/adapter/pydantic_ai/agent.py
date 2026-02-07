@@ -2,20 +2,20 @@
 
 import re
 
-from pydantic_ai import Agent
+import pydantic_ai
 
 from src.query.adapter.pydantic_ai import prompts
-from src.query.schema.response import Citation, QueryAnswer
-from src.query.service.retrieval import RetrievedChunk
-from src.settings import settings
+from src.query.schema import response as query_response
+from src.query.service import retrieval
+from src import settings as settings_module
 
 
 class RAGAgent:
     """RAG agent using PydanticAI for question answering with citations."""
 
-    def __init__(self, model: str = "openai:gpt-4o-mini"):
+    def __init__(self, model: str = "openai:gpt-4o-mini") -> None:
         self._model = model
-        self._agent = Agent(
+        self._agent = pydantic_ai.Agent(
             model=self._model,
             system_prompt=prompts.SYSTEM_PROMPT,
         )
@@ -23,9 +23,9 @@ class RAGAgent:
     async def answer(
         self,
         question: str,
-        retrieved_chunks: list[RetrievedChunk],
-        conversation_history: list[dict] | None = None,
-    ) -> QueryAnswer:
+        retrieved_chunks: list[retrieval.RetrievedChunk],
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> query_response.QueryAnswer:
         """Generate an answer with citations.
 
         Args:
@@ -37,15 +37,15 @@ class RAGAgent:
             QueryAnswer with answer text and citations.
         """
         if not retrieved_chunks:
-            return QueryAnswer(
+            return query_response.QueryAnswer(
                 answer="I cannot find any relevant information in the sources to answer this question.",
                 citations=[],
                 sources_used=0,
             )
 
         # Build sources for the prompt
-        sources = []
-        chunk_map: dict[int, RetrievedChunk] = {}  # index -> chunk
+        sources: list[dict[str, str | int]] = []
+        chunk_map: dict[int, retrieval.RetrievedChunk] = {}  # index -> chunk
 
         for i, retrieved in enumerate(retrieved_chunks, start=1):
             sources.append({
@@ -72,7 +72,7 @@ class RAGAgent:
         # Extract citations from the answer
         citations = self._extract_citations(answer_text, chunk_map)
 
-        return QueryAnswer(
+        return query_response.QueryAnswer(
             answer=answer_text,
             citations=citations,
             sources_used=len(retrieved_chunks),
@@ -81,8 +81,8 @@ class RAGAgent:
     def _extract_citations(
         self,
         answer: str,
-        chunk_map: dict[int, RetrievedChunk],
-    ) -> list[Citation]:
+        chunk_map: dict[int, retrieval.RetrievedChunk],
+    ) -> list[query_response.Citation]:
         """Extract citation objects from the answer text.
 
         Finds [1], [2], etc. patterns and maps them to source chunks.
@@ -101,7 +101,7 @@ class RAGAgent:
                 unique_indices.append(idx)
 
         # Build citation objects
-        citations: list[Citation] = []
+        citations: list[query_response.Citation] = []
         for idx in unique_indices:
             retrieved = chunk_map[idx]
             chunk = retrieved.chunk
@@ -113,7 +113,7 @@ class RAGAgent:
                 snippet += "..."
 
             citations.append(
-                Citation(
+                query_response.Citation(
                     citation_index=idx,
                     document_id=document.id,
                     chunk_id=chunk.id,

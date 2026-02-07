@@ -20,7 +20,7 @@ Example:
 """
 
 
-def format_sources(sources: list[dict]) -> str:
+def format_sources(sources: list[dict[str, str | int]]) -> str:
     """Format sources for the prompt.
 
     Args:
@@ -53,7 +53,7 @@ SOURCES:
 Remember: Use citations [1], [2], etc. for every factual claim. If the information is not in the sources, say so."""
 
 
-def format_conversation_context(conversation_history: list[dict]) -> str:
+def format_conversation_context(conversation_history: list[dict[str, str]]) -> str:
     """Format conversation history for context.
 
     Args:
@@ -79,7 +79,7 @@ def format_conversation_context(conversation_history: list[dict]) -> str:
 
 
 def format_user_prompt_with_history(
-    question: str, sources_text: str, conversation_history: list[dict]
+    question: str, sources_text: str, conversation_history: list[dict[str, str]]
 ) -> str:
     """Format the user prompt with conversation history and sources."""
     history_context = format_conversation_context(conversation_history)

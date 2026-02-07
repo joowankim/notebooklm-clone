@@ -2,15 +2,15 @@
 
 import datetime
 import uuid
-from enum import StrEnum
-from typing import Self
+import enum
+from typing import Any, Self
 
 import pydantic
 
-from src.common.types import utc_now
+from src.common import types as common_types
 
 
-class MessageRole(StrEnum):
+class MessageRole(enum.StrEnum):
     """Role of a message in conversation."""
 
     USER = "user"
@@ -25,7 +25,7 @@ class Message(pydantic.BaseModel):
     id: str
     role: MessageRole
     content: str
-    citations: list[dict] | None = None  # For assistant messages
+    citations: list[dict[str, Any]] | None = None  # For assistant messages
     created_at: datetime.datetime
 
     @classmethod
@@ -35,18 +35,18 @@ class Message(pydantic.BaseModel):
             id=uuid.uuid4().hex,
             role=MessageRole.USER,
             content=content,
-            created_at=utc_now(),
+            created_at=common_types.utc_now(),
         )
 
     @classmethod
-    def assistant(cls, content: str, citations: list[dict] | None = None) -> Self:
+    def assistant(cls, content: str, citations: list[dict[str, Any]] | None = None) -> Self:
         """Create an assistant message."""
         return cls(
             id=uuid.uuid4().hex,
             role=MessageRole.ASSISTANT,
             content=content,
             citations=citations,
-            created_at=utc_now(),
+            created_at=common_types.utc_now(),
         )
 
 
@@ -68,7 +68,7 @@ class Conversation(pydantic.BaseModel):
     @classmethod
     def create(cls, notebook_id: str, title: str | None = None) -> Self:
         """Factory method to create a new conversation."""
-        now = utc_now()
+        now = common_types.utc_now()
         return cls(
             id=uuid.uuid4().hex,
             notebook_id=notebook_id,
@@ -89,7 +89,7 @@ class Conversation(pydantic.BaseModel):
             update={
                 "messages": self.messages + (message,),
                 "title": new_title,
-                "updated_at": utc_now(),
+                "updated_at": common_types.utc_now(),
             }
         )
 
@@ -102,7 +102,7 @@ class Conversation(pydantic.BaseModel):
         """Return the number of messages."""
         return len(self.messages)
 
-    def get_context_for_rag(self, max_turns: int = 5) -> list[dict]:
+    def get_context_for_rag(self, max_turns: int = 5) -> list[dict[str, str]]:
         """Get recent conversation context for RAG.
 
         Args:
