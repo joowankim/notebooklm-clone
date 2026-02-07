@@ -1,19 +1,22 @@
 """Retrieval service for RAG queries."""
 
-from src.chunk.adapter.embedding.port import EmbeddingProviderPort
-from src.chunk.adapter.repository import ChunkRepository
-from src.chunk.domain.model import Chunk
-from src.document.adapter.repository import DocumentRepository
-from src.document.domain.model import Document
+import pydantic
+
+from src.chunk.adapter.embedding import port as embedding_port
+from src.chunk.adapter import repository as chunk_repository_module
+from src.chunk.domain import model as chunk_model
+from src.document.adapter import repository as document_repository_module
+from src.document.domain import model as document_model
 
 
-class RetrievedChunk:
+class RetrievedChunk(pydantic.BaseModel):
     """A retrieved chunk with its source document."""
 
-    def __init__(self, chunk: Chunk, document: Document, score: float):
-        self.chunk = chunk
-        self.document = document
-        self.score = score
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    chunk: chunk_model.Chunk
+    document: document_model.Document
+    score: float
 
 
 class RetrievalService:
@@ -21,10 +24,10 @@ class RetrievalService:
 
     def __init__(
         self,
-        chunk_repository: ChunkRepository,
-        document_repository: DocumentRepository,
-        embedding_provider: EmbeddingProviderPort,
-    ):
+        chunk_repository: chunk_repository_module.ChunkRepository,
+        document_repository: document_repository_module.DocumentRepository,
+        embedding_provider: embedding_port.EmbeddingProviderPort,
+    ) -> None:
         self._chunk_repository = chunk_repository
         self._document_repository = document_repository
         self._embedding_provider = embedding_provider
@@ -60,7 +63,7 @@ class RetrievalService:
 
         # Fetch documents for the chunks
         document_ids = list(set(chunk.document_id for chunk, _ in results))
-        documents: dict[str, Document] = {}
+        documents: dict[str, document_model.Document] = {}
 
         for doc_id in document_ids:
             doc = await self._document_repository.find_by_id(doc_id)
@@ -72,6 +75,6 @@ class RetrievalService:
         for chunk, score in results:
             document = documents.get(chunk.document_id)
             if document:
-                retrieved.append(RetrievedChunk(chunk, document, score))
+                retrieved.append(RetrievedChunk(chunk=chunk, document=document, score=score))
 
         return retrieved
