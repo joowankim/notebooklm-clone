@@ -33,5 +33,8 @@ class Settings(pydantic_settings.BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
+    # Evaluation
+    eval_model: str = "openai:gpt-4o-mini"
+
 
 settings = Settings()

@@ -5,6 +5,7 @@ from dependency_injector import containers, providers
 from src.chunk.dependency import ChunkContainer
 from src.conversation.dependency import ConversationContainer
 from src.document.dependency import DocumentContainer
+from src.evaluation.dependency import EvaluationContainer
 from src.notebook.dependency import NotebookContainer
 from src.query.dependency import QueryContainer
 
@@ -48,4 +49,13 @@ class ApplicationContainer(containers.DeclarativeContainer):
         notebook_repository=notebook.adapter.repository,
         retrieval_service=query.service.retrieval_service,
         rag_agent=query.adapter.rag_agent,
+    )
+
+    evaluation = providers.Container(
+        EvaluationContainer,
+        db_session=db_session,
+        notebook_adapter=notebook.adapter,
+        document_adapter=document.adapter,
+        chunk_adapter=chunk.adapter,
+        query_service=query.service,
     )

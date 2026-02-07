@@ -10,13 +10,14 @@ import slowapi
 import slowapi.errors
 import starlette.middleware.base
 
+from src import database as database_module
 from src import exceptions
 from src.chunk.entrypoint import api as chunk_api
 from src.common import rate_limit
 from src.conversation.entrypoint import api as conversation_api
-from src import database as database_module
 from src.dependency import container as container_module
 from src.document.entrypoint import api as document_api
+from src.evaluation.entrypoint import api as evaluation_api
 from src.notebook.entrypoint import api as notebook_api
 from src.query.entrypoint import api as query_api
 
@@ -79,6 +80,7 @@ container.wire(
         "src.chunk.entrypoint.api",
         "src.query.entrypoint.api",
         "src.conversation.entrypoint.api",
+        "src.evaluation.entrypoint.api",
     ]
 )
 
@@ -142,3 +144,4 @@ app.include_router(document_api.document_router, prefix="/api/v1")
 app.include_router(chunk_api.router, prefix="/api/v1")
 app.include_router(query_api.router, prefix="/api/v1")
 app.include_router(conversation_api.router, prefix="/api/v1")
+app.include_router(evaluation_api.router, prefix="/api/v1")

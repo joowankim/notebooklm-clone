@@ -12,7 +12,7 @@ from src.database import Base
 from src.settings import settings
 
 # Import all models to register them with Base.metadata
-from src.infrastructure.models import notebook, document, chunk  # noqa: F401
+from src.infrastructure.models import notebook, document, chunk, conversation, evaluation  # noqa: F401
 
 # Alembic Config object
 config = context.config
