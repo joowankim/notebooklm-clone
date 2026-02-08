@@ -3,7 +3,7 @@
 import rich.console
 import typer
 
-from src.cli.commands import conversation, evaluation, notebook, query, source
+from src.cli.commands import conversation, crawl, evaluation, notebook, query, source
 
 console = rich.console.Console()
 
@@ -19,6 +19,7 @@ app.add_typer(source.app, name="source", help="Manage sources")
 app.add_typer(query.app, name="query", help="Query notebooks")
 app.add_typer(conversation.app, name="conversation", help="Manage conversations")
 app.add_typer(evaluation.app, name="evaluation", help="Evaluate retrieval quality")
+app.add_typer(crawl.app, name="crawl", help="Manage URL crawling")
 
 
 @app.callback()
