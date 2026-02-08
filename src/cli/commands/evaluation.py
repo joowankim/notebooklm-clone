@@ -10,6 +10,7 @@ import typer
 from src import settings as settings_module
 from src.chunk.adapter import repository as chunk_repository_module
 from src.chunk.adapter.embedding import openai_embedding
+from src.chunk.domain import model as chunk_model
 from src.cli import utils as cli_utils
 from src.document.adapter import repository as document_repository_module
 from src.document.domain import status as document_status_module
@@ -47,13 +48,8 @@ async def _generate_dataset(
             eval_model=settings_module.settings.eval_model
         )
 
-        # Verify notebook
-        notebook = await notebook_repo.find_by_id(notebook_id)
-        if notebook is None:
-            console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-            raise typer.Exit(1)
+        _verify_notebook_or_exit(await notebook_repo.find_by_id(notebook_id), notebook_id)
 
-        # Create dataset
         dataset = model.EvaluationDataset.create(
             notebook_id=notebook_id,
             name=name,
@@ -62,25 +58,9 @@ async def _generate_dataset(
         )
         dataset = dataset.mark_generating()
         await dataset_repo.save(dataset)
-
         console.print(f"[yellow]Generating dataset...[/yellow] (id: {dataset.id})")
 
-        # Collect chunks
-        documents = await document_repo.list_by_status(
-            notebook_id, document_status_module.DocumentStatus.COMPLETED
-        )
-        if not documents:
-            console.print("[red]No completed documents found in notebook.[/red]")
-            raise typer.Exit(1)
-
-        all_chunks = []
-        for doc in documents:
-            chunks = await chunk_repo.list_by_document(doc.id)
-            all_chunks.extend(chunks)
-
-        console.print(f"  Found {len(all_chunks)} chunks from {len(documents)} documents")
-
-        # Generate test cases
+        all_chunks = await _collect_chunks(document_repo, chunk_repo, notebook_id)
         test_cases = await test_gen.generate_test_cases(
             chunks=all_chunks,
             questions_per_chunk=questions,
@@ -100,6 +80,35 @@ async def _generate_dataset(
 
         console.print(f"[green]Generated {len(test_cases)} test cases[/green]")
         console.print(f"  Dataset ID: {dataset.id}")
+
+
+def _verify_notebook_or_exit(notebook: object, notebook_id: str) -> None:
+    """Exit with error if notebook is None."""
+    if notebook is None:
+        console.print(f"[red]Notebook not found:[/red] {notebook_id}")
+        raise typer.Exit(1)
+
+
+async def _collect_chunks(
+    document_repo: document_repository_module.DocumentRepository,
+    chunk_repo: chunk_repository_module.ChunkRepository,
+    notebook_id: str,
+) -> list[chunk_model.Chunk]:
+    """Collect all chunks from completed documents in a notebook."""
+    documents = await document_repo.list_by_status(
+        notebook_id, document_status_module.DocumentStatus.COMPLETED
+    )
+    if not documents:
+        console.print("[red]No completed documents found in notebook.[/red]")
+        raise typer.Exit(1)
+
+    all_chunks = []
+    for doc in documents:
+        chunks = await chunk_repo.list_by_document(doc.id)
+        all_chunks.extend(chunks)
+
+    console.print(f"  Found {len(all_chunks)} chunks from {len(documents)} documents")
+    return all_chunks
 
 
 @app.command("list")
@@ -158,93 +167,115 @@ async def _run_evaluation(dataset_id: str, k: int) -> None:
     async with cli_utils.get_session_context() as session:
         dataset_repo = evaluation_repository_module.DatasetRepository(session)
         run_repo = evaluation_repository_module.RunRepository(session)
-        chunk_repo = chunk_repository_module.ChunkRepository(session)
-        document_repo = document_repository_module.DocumentRepository(session)
-        embedding_provider = openai_embedding.OpenAIEmbeddingProvider()
-        retrieval_service = retrieval_module.RetrievalService(
-            chunk_repository=chunk_repo,
-            document_repository=document_repo,
-            embedding_provider=embedding_provider,
-        )
+        retrieval_service = _build_retrieval_service(session)
 
-        # Load dataset
-        dataset = await dataset_repo.find_by_id(dataset_id)
-        if dataset is None:
-            console.print(f"[red]Dataset not found:[/red] {dataset_id}")
-            raise typer.Exit(1)
-
-        if not dataset.status.is_runnable:
-            console.print(f"[red]Dataset not ready (status: {dataset.status})[/red]")
-            raise typer.Exit(1)
-
+        dataset = await _load_runnable_dataset(dataset_repo, dataset_id)
         console.print(f"[yellow]Running evaluation (k={k})...[/yellow]")
         console.print(f"  Dataset: {dataset.name} ({len(dataset.test_cases)} test cases)")
 
-        # Create run
         run = model.EvaluationRun.create(dataset_id=dataset_id, k=k)
         run = run.mark_running()
         await run_repo.save(run)
 
-        # Evaluate each test case
-        precisions: list[float] = []
-        recalls: list[float] = []
-        hits: list[bool] = []
-        reciprocal_ranks: list[float] = []
-        results: list[model.TestCaseResult] = []
-
-        for i, test_case in enumerate(dataset.test_cases, start=1):
-            console.print(f"  Evaluating {i}/{len(dataset.test_cases)}...", end="\r")
-
-            retrieved_chunks = await retrieval_service.retrieve(
-                notebook_id=dataset.notebook_id,
-                query=test_case.question,
-                max_chunks=k,
-            )
-
-            retrieved_ids = [rc.chunk.id for rc in retrieved_chunks]
-            retrieved_scores = [rc.score for rc in retrieved_chunks]
-            relevant_ids = set(test_case.ground_truth_chunk_ids)
-
-            p = metric_module.precision_at_k(retrieved_ids, relevant_ids, k)
-            r = metric_module.recall_at_k(retrieved_ids, relevant_ids, k)
-            h = metric_module.hit_at_k(retrieved_ids, relevant_ids, k)
-            rr = metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k)
-
-            precisions.append(p)
-            recalls.append(r)
-            hits.append(h)
-            reciprocal_ranks.append(rr)
-
-            result = model.TestCaseResult.create(
-                test_case_id=test_case.id,
-                retrieved_chunk_ids=tuple(retrieved_ids),
-                retrieved_scores=tuple(retrieved_scores),
-                precision=p,
-                recall=r,
-                hit=h,
-                reciprocal_rank=rr,
-            )
-            results.append(result)
-
-        # Aggregate
-        mean_p, mean_r, hit_rate, mrr = metric_module.aggregate_metrics(
-            precisions, recalls, hits, reciprocal_ranks
+        results = await _evaluate_all_test_cases(
+            dataset, retrieval_service, k
         )
-
-        metrics = model.RetrievalMetrics(
-            precision_at_k=mean_p,
-            recall_at_k=mean_r,
-            hit_rate_at_k=hit_rate,
-            mrr=mrr,
-            k=k,
-        )
+        metrics = _compute_metrics(results, k)
 
         run = run.mark_completed(metrics=metrics, results=tuple(results))
         await run_repo.save_with_results(run)
         await session.commit()
 
-        # Display results
         _print_metrics(metrics, run.id)
+
+
+def _build_retrieval_service(
+    session: object,
+) -> retrieval_module.RetrievalService:
+    """Build retrieval service with required dependencies."""
+    chunk_repo = chunk_repository_module.ChunkRepository(session)
+    document_repo = document_repository_module.DocumentRepository(session)
+    embedding_provider = openai_embedding.OpenAIEmbeddingProvider()
+    return retrieval_module.RetrievalService(
+        chunk_repository=chunk_repo,
+        document_repository=document_repo,
+        embedding_provider=embedding_provider,
+    )
+
+
+async def _load_runnable_dataset(
+    dataset_repo: evaluation_repository_module.DatasetRepository,
+    dataset_id: str,
+) -> model.EvaluationDataset:
+    """Load dataset and verify it is runnable, or exit."""
+    dataset = await dataset_repo.find_by_id(dataset_id)
+    if dataset is None:
+        console.print(f"[red]Dataset not found:[/red] {dataset_id}")
+        raise typer.Exit(1)
+    if not dataset.status.is_runnable:
+        console.print(f"[red]Dataset not ready (status: {dataset.status})[/red]")
+        raise typer.Exit(1)
+    return dataset
+
+
+async def _evaluate_all_test_cases(
+    dataset: model.EvaluationDataset,
+    retrieval_service: retrieval_module.RetrievalService,
+    k: int,
+) -> list[model.TestCaseResult]:
+    """Evaluate all test cases and return results."""
+    results: list[model.TestCaseResult] = []
+
+    for i, test_case in enumerate(dataset.test_cases, start=1):
+        console.print(f"  Evaluating {i}/{len(dataset.test_cases)}...", end="\r")
+
+        retrieved_chunks = await retrieval_service.retrieve(
+            notebook_id=dataset.notebook_id,
+            query=test_case.question,
+            max_chunks=k,
+        )
+
+        retrieved_ids = [rc.chunk.id for rc in retrieved_chunks]
+        retrieved_scores = [rc.score for rc in retrieved_chunks]
+        relevant_ids = set(test_case.ground_truth_chunk_ids)
+
+        case_metrics = model.CaseMetrics(
+            precision=metric_module.precision_at_k(retrieved_ids, relevant_ids, k),
+            recall=metric_module.recall_at_k(retrieved_ids, relevant_ids, k),
+            hit=metric_module.hit_at_k(retrieved_ids, relevant_ids, k),
+            reciprocal_rank=metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k),
+        )
+        result = model.TestCaseResult.create(
+            test_case_id=test_case.id,
+            retrieved_chunk_ids=tuple(retrieved_ids),
+            retrieved_scores=tuple(retrieved_scores),
+            metrics=case_metrics,
+        )
+        results.append(result)
+
+    return results
+
+
+def _compute_metrics(
+    results: list[model.TestCaseResult], k: int
+) -> model.RetrievalMetrics:
+    """Compute aggregate metrics from individual results."""
+    precisions = [r.precision for r in results]
+    recalls = [r.recall for r in results]
+    hits = [r.hit for r in results]
+    reciprocal_ranks = [r.reciprocal_rank for r in results]
+
+    mean_p, mean_r, hit_rate, mrr = metric_module.aggregate_metrics(
+        precisions, recalls, hits, reciprocal_ranks
+    )
+
+    return model.RetrievalMetrics(
+        precision_at_k=mean_p,
+        recall_at_k=mean_r,
+        hit_rate_at_k=hit_rate,
+        mrr=mrr,
+        k=k,
+    )
 
 
 @app.command("results")

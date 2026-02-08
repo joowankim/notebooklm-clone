@@ -7,6 +7,7 @@ from typing import Self
 
 import pydantic
 
+from src import exceptions
 from src.common import types as common_types
 
 
@@ -83,6 +84,17 @@ class TestCase(pydantic.BaseModel):
         )
 
 
+class CaseMetrics(pydantic.BaseModel):
+    """Per-case retrieval metrics."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    precision: float
+    recall: float
+    hit: bool
+    reciprocal_rank: float
+
+
 class TestCaseResult(pydantic.BaseModel):
     """Result of evaluating a single test case."""
 
@@ -103,10 +115,7 @@ class TestCaseResult(pydantic.BaseModel):
         test_case_id: str,
         retrieved_chunk_ids: tuple[str, ...],
         retrieved_scores: tuple[float, ...],
-        precision: float,
-        recall: float,
-        hit: bool,
-        reciprocal_rank: float,
+        metrics: CaseMetrics,
     ) -> Self:
         """Factory method to create a test case result."""
         return cls(
@@ -114,10 +123,10 @@ class TestCaseResult(pydantic.BaseModel):
             test_case_id=test_case_id,
             retrieved_chunk_ids=retrieved_chunk_ids,
             retrieved_scores=retrieved_scores,
-            precision=precision,
-            recall=recall,
-            hit=hit,
-            reciprocal_rank=reciprocal_rank,
+            precision=metrics.precision,
+            recall=metrics.recall,
+            hit=metrics.hit,
+            reciprocal_rank=metrics.reciprocal_rank,
         )
 
 
@@ -161,7 +170,6 @@ class EvaluationDataset(pydantic.BaseModel):
     def mark_generating(self) -> Self:
         """Mark dataset as generating."""
         if not self.status.is_generatable:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot generate dataset in status: {self.status}"
             )
@@ -175,7 +183,6 @@ class EvaluationDataset(pydantic.BaseModel):
     def mark_completed(self, test_cases: tuple[TestCase, ...]) -> Self:
         """Mark dataset as completed with test cases."""
         if self.status != DatasetStatus.GENERATING:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot complete dataset in status: {self.status}"
             )
@@ -190,7 +197,6 @@ class EvaluationDataset(pydantic.BaseModel):
     def mark_failed(self, error_message: str) -> Self:
         """Mark dataset as failed."""
         if self.status != DatasetStatus.GENERATING:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot fail dataset in status: {self.status}"
             )
@@ -237,7 +243,6 @@ class EvaluationRun(pydantic.BaseModel):
     def mark_running(self) -> Self:
         """Mark run as running."""
         if not self.status.is_runnable:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot run evaluation in status: {self.status}"
             )
@@ -255,7 +260,6 @@ class EvaluationRun(pydantic.BaseModel):
     ) -> Self:
         """Mark run as completed with metrics."""
         if self.status != RunStatus.RUNNING:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot complete evaluation in status: {self.status}"
             )
@@ -274,7 +278,6 @@ class EvaluationRun(pydantic.BaseModel):
     def mark_failed(self, error_message: str) -> Self:
         """Mark run as failed."""
         if self.status != RunStatus.RUNNING:
-            from src import exceptions
             raise exceptions.InvalidStateError(
                 f"Cannot fail evaluation in status: {self.status}"
             )
