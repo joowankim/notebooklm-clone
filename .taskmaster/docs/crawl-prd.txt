@@ -1,0 +1,308 @@
+# URL Crawling Feature - PRD
+
+## Overview
+Add a URL crawling feature that, given a seed URL, discovers and collects all linked (nested) pages within the same domain, then ingests each discovered page as a separate document in the notebook.
+
+## Current State
+The system currently supports adding individual URLs one at a time via `AddSource`. Each URL goes through the ingestion pipeline: extract content → chunk → embed → store. There is no mechanism to automatically discover and ingest linked pages from a starting URL.
+
+## Goals
+1. Given a seed URL, crawl the page and discover all internal links (same domain)
+2. Support configurable crawl depth and max pages limit
+3. Allow URL pattern filtering (include/exclude patterns)
+4. Reuse existing ingestion pipeline for each discovered page
+5. Track crawl progress and status
+6. Provide API endpoint and CLI command for initiating crawls
+
+---
+
+## Feature 1: Crawl Domain Model
+### Description
+Create the core domain entities for the crawling feature: `CrawlJob` (aggregate root) that tracks the overall crawl operation, and `DiscoveredUrl` (value object) representing each discovered URL and its status.
+
+### Domain Model Design
+```
+CrawlJob (Entity / Aggregate Root):
+  - id: str (UUID hex)
+  - notebook_id: str (FK to notebook)
+  - seed_url: str (starting URL)
+  - domain: str (extracted domain for scope limiting)
+  - max_depth: int (default 2)
+  - max_pages: int (default 50)
+  - url_include_pattern: str | None (regex for URLs to include)
+  - url_exclude_pattern: str | None (regex for URLs to exclude)
+  - status: CrawlStatus (PENDING | IN_PROGRESS | COMPLETED | FAILED | CANCELLED)
+  - total_discovered: int (count of discovered URLs)
+  - total_ingested: int (count of successfully ingested URLs)
+  - error_message: str | None
+  - created_at, updated_at: datetime
+
+CrawlStatus (Enum):
+  - PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED
+  - State transitions: PENDING -> IN_PROGRESS -> COMPLETED|FAILED
+  - PENDING|IN_PROGRESS -> CANCELLED
+
+DiscoveredUrl (Value Object):
+  - url: str
+  - depth: int (distance from seed URL)
+  - status: DiscoveredUrlStatus (PENDING | INGESTED | SKIPPED | FAILED)
+  - document_id: str | None (FK to document, set after ingestion)
+```
+
+### Acceptance Criteria
+- CrawlJob entity is immutable (frozen pydantic BaseModel)
+- Factory methods for creation and state transitions
+- CrawlStatus enum with proper transition validation
+- DiscoveredUrl value object with equality by value
+- Domain-level validation (max_depth > 0, max_pages > 0)
+- Unit tests for all state transitions and factory methods
+
+---
+
+## Feature 2: Crawl Persistence (Repository & ORM)
+### Description
+Create the database schema (ORM models) and repository for persisting CrawlJob entities. Use the same patterns as existing DocumentRepository.
+
+### Database Tables
+```
+crawl_jobs:
+  - id: String(32), PK
+  - notebook_id: String(32), FK→notebooks.id CASCADE
+  - seed_url: Text
+  - domain: String(255)
+  - max_depth: Integer
+  - max_pages: Integer
+  - url_include_pattern: Text, nullable
+  - url_exclude_pattern: Text, nullable
+  - status: String(20), indexed
+  - total_discovered: Integer, default 0
+  - total_ingested: Integer, default 0
+  - error_message: Text, nullable
+  - created_at, updated_at: DateTime(timezone=True)
+
+crawl_discovered_urls:
+  - id: String(32), PK
+  - crawl_job_id: String(32), FK→crawl_jobs.id CASCADE
+  - url: Text
+  - depth: Integer
+  - status: String(20)
+  - document_id: String(32), FK→documents.id, nullable
+  - Unique constraint: (crawl_job_id, url)
+```
+
+### Acceptance Criteria
+- ORM models follow existing patterns (SQLAlchemy declarative)
+- CrawlJobRepository with CRUD + query methods
+- Mapper between domain entity and ORM model
+- Alembic migration for new tables
+- Unit tests for repository operations
+
+---
+
+## Feature 3: Link Discovery Service
+### Description
+Create a service that fetches a web page and extracts all internal links (same domain). This service is responsible only for URL discovery, not content extraction.
+
+### Design
+```
+LinkDiscoveryService:
+  - discover_links(url: str, domain: str) -> list[DiscoveredLink]
+  - Fetches page HTML
+  - Parses all <a href="..."> tags
+  - Normalizes URLs (resolve relative, remove fragments/query params)
+  - Filters to same domain only
+  - Returns list of absolute URLs
+
+DiscoveredLink (VO):
+  - url: str
+  - anchor_text: str | None
+```
+
+### Acceptance Criteria
+- Extracts all anchor href links from HTML
+- Resolves relative URLs to absolute
+- Filters URLs to same domain only
+- Removes URL fragments (#section) and optionally query parameters
+- Handles edge cases: malformed URLs, non-HTTP schemes (mailto:, javascript:)
+- Respects robots.txt (optional, configurable)
+- Configurable HTTP timeout and User-Agent
+- Unit tests with mock HTML responses
+
+---
+
+## Feature 4: Crawl Execution Service
+### Description
+Create the core crawl orchestration service that performs BFS traversal of pages, discovers links, and creates documents for each discovered URL. This service coordinates between LinkDiscoveryService and the existing ingestion pipeline.
+
+### Design
+```
+CrawlService:
+  - execute(crawl_job: CrawlJob) -> CrawlJob
+  - BFS traversal from seed URL
+  - At each page: discover links → filter → enqueue
+  - For each discovered URL: create Document in PENDING → trigger ingestion
+  - Update CrawlJob progress counters
+  - Respect max_depth and max_pages limits
+  - Apply include/exclude URL patterns
+  - Skip already-existing URLs in the notebook (dedup)
+```
+
+### Algorithm
+```
+visited = set()
+queue = [(seed_url, depth=0)]
+while queue and len(visited) < max_pages:
+    url, depth = queue.pop(0)
+    if url in visited or depth > max_depth:
+        continue
+    visited.add(url)
+
+    # Create document & trigger ingestion
+    create_document(notebook_id, url)
+
+    # Discover links if not at max depth
+    if depth < max_depth:
+        links = discover_links(url, domain)
+        for link in links:
+            if matches_patterns(link) and link not in visited:
+                queue.append((link, depth + 1))
+```
+
+### Acceptance Criteria
+- BFS traversal with depth limiting
+- Respects max_pages limit
+- URL pattern matching (include/exclude regex)
+- Deduplicates URLs within the crawl and against existing notebook documents
+- Creates documents via existing AddSourceHandler or DocumentRepository
+- Triggers ingestion pipeline for each discovered URL
+- Updates CrawlJob counters and status
+- Handles errors gracefully (individual page failures don't stop crawl)
+- Unit tests with mocked dependencies
+
+---
+
+## Feature 5: Crawl Handler & Schema
+### Description
+Create the command handler, schemas (command/response/query), following the existing DDD handler pattern.
+
+### Schemas
+```
+Command:
+  StartCrawl:
+    - url: HttpUrl (seed URL)
+    - max_depth: int = 2
+    - max_pages: int = 50
+    - url_include_pattern: str | None = None
+    - url_exclude_pattern: str | None = None
+
+  CancelCrawl: (no fields, ID from path)
+
+Response:
+  CrawlJobId:
+    - id: str
+
+  CrawlJobDetail:
+    - id, notebook_id, seed_url, domain
+    - max_depth, max_pages
+    - url_include_pattern, url_exclude_pattern
+    - status, total_discovered, total_ingested
+    - error_message
+    - created_at, updated_at
+    - discovered_urls: list[DiscoveredUrlDetail] (optional)
+
+  DiscoveredUrlDetail:
+    - url, depth, status, document_id
+
+Query:
+  ListCrawlJobs:
+    - notebook_id: str
+    - (extends ListQuery for pagination)
+```
+
+### Handlers
+```
+StartCrawlHandler:
+  - Validates notebook exists
+  - Creates CrawlJob in PENDING
+  - Triggers background crawl execution
+  - Returns CrawlJobId
+
+GetCrawlJobHandler:
+  - Returns CrawlJobDetail with discovered URLs
+
+ListCrawlJobsHandler:
+  - Returns paginated list of crawl jobs for a notebook
+
+CancelCrawlHandler:
+  - Marks CrawlJob as CANCELLED
+  - Stops ongoing crawl (if possible)
+```
+
+### Acceptance Criteria
+- All handlers follow existing patterns (constructor injection, async)
+- Proper error handling (NotFoundError, ValidationError)
+- Unit tests for all handlers with mock repositories
+
+---
+
+## Feature 6: Crawl API Endpoints
+### Description
+Create FastAPI API endpoints for the crawl feature.
+
+### Endpoints
+```
+POST   /api/v1/notebooks/{notebook_id}/crawl       → start_crawl
+GET    /api/v1/notebooks/{notebook_id}/crawl        → list_crawl_jobs
+GET    /api/v1/crawl/{crawl_job_id}                 → get_crawl_job
+POST   /api/v1/crawl/{crawl_job_id}/cancel          → cancel_crawl
+```
+
+### Acceptance Criteria
+- Endpoints follow existing patterns (dependency injection, response models)
+- Proper HTTP status codes (201 for creation, 200 for retrieval, 204 for cancel)
+- API documentation with summary, description, responses
+- Error responses documented
+
+---
+
+## Feature 7: Crawl CLI Commands
+### Description
+Add CLI commands for the crawl feature using Typer.
+
+### Commands
+```
+ntlm source crawl <notebook_id> <url> [--depth N] [--max-pages N] [--include PATTERN] [--exclude PATTERN]
+ntlm crawl status <crawl_job_id>
+ntlm crawl list <notebook_id>
+ntlm crawl cancel <crawl_job_id>
+```
+
+### Acceptance Criteria
+- Commands follow existing CLI patterns
+- Rich terminal output with progress display
+- Error handling with user-friendly messages
+
+---
+
+## Feature 8: DI Container & Integration
+### Description
+Create the dependency injection container for the crawl module and integrate it into the main application.
+
+### Acceptance Criteria
+- CrawlContainer with proper wiring
+- Registered in main app container
+- Background crawl service integrated with app lifecycle
+- All components properly wired and testable
+
+---
+
+## Technical Constraints
+- Follow existing DDD architecture (domain/handler/adapter/entrypoint/schema)
+- Immutable domain models (frozen pydantic BaseModel)
+- Use existing ContentExtractorPort for page fetching where applicable
+- Async throughout (httpx for HTTP requests)
+- No hardcoded magic numbers (use settings)
+- snake_case functions/variables, PascalCase classes
+- All functions have type hints
+- Custom exceptions, no bare except
+- TDD workflow: write tests first

@@ -1,0 +1,168 @@
+# NotebookLM Clone - Feature Completion & Quality Improvement PRD
+
+## Project Overview
+A NotebookLM-like Document Research System built with FastAPI, following DDD architecture. The system allows users to create notebooks, ingest source URLs, chunk and embed documents, perform RAG queries with citations, manage multi-turn conversations, and evaluate retrieval quality.
+
+## Current State
+The core architecture is implemented with 6 domain modules: notebook, document, chunk, query, conversation, evaluation. Each module follows DDD layered architecture (domain/handler/adapter/entrypoint/schema). However, there are significant gaps in test coverage, API documentation, error handling consistency, and missing features.
+
+## Goals
+1. Achieve 80%+ test coverage across all modules
+2. Complete missing API endpoint documentation (summary, description, responses)
+3. Add missing CRUD operations (delete document/source)
+4. Add handler-level unit tests for all modules
+5. Add integration tests for key workflows
+6. Improve code quality and consistency
+
+---
+
+## Feature 1: Notebook API Endpoint Documentation
+### Description
+The notebook API endpoints (create, list, get, update, delete) are missing summary, description, and responses documentation in FastAPI router decorators. All endpoints should follow the DDD layered architecture rules and include proper HTTP status codes using `http.HTTPStatus` constants.
+
+### Acceptance Criteria
+- All notebook endpoints have `summary`, `description`, and `responses` parameters
+- Status codes use `http.HTTPStatus` constants
+- Response descriptions match actual behavior
+- Error responses documented (404 for not found, 400 for validation errors)
+
+---
+
+## Feature 2: Document API Endpoint Documentation
+### Description
+The document/source API endpoints (add_source, list_sources, get_document) are missing summary, description, and responses documentation.
+
+### Acceptance Criteria
+- All document endpoints have `summary`, `description`, and `responses` parameters
+- Status codes use `http.HTTPStatus` constants
+- Error responses documented (404, 400, 409 for duplicate URL)
+
+---
+
+## Feature 3: Delete Document/Source Feature
+### Description
+Add the ability to delete a source document from a notebook. This requires a new handler, API endpoint, and CLI command. When a document is deleted, its associated chunks should also be cleaned up.
+
+### Acceptance Criteria
+- DELETE endpoint at `/api/v1/notebooks/{notebook_id}/sources/{document_id}`
+- Handler validates notebook and document existence
+- Returns 204 No Content on success
+- Returns 404 if document not found
+- Unit tests for the delete handler
+- CLI command `ntlm source delete <notebook-id> <document-id>`
+
+---
+
+## Feature 4: Notebook Handler Unit Tests
+### Description
+Add comprehensive unit tests for all notebook handlers (CreateNotebookHandler, GetNotebookHandler, ListNotebooksHandler, UpdateNotebookHandler, DeleteNotebookHandler) using mock repositories.
+
+### Acceptance Criteria
+- Tests for happy path of each handler
+- Tests for error cases (not found, validation errors)
+- Tests use Arrange-Act-Assert pattern
+- Tests verify immutability of domain models
+- Minimum 90% coverage for notebook handler module
+
+---
+
+## Feature 5: Document Handler Unit Tests
+### Description
+Add comprehensive unit tests for all document handlers (AddSourceHandler, GetDocumentHandler, ListSourcesHandler) including the new delete handler.
+
+### Acceptance Criteria
+- Tests for happy path of each handler
+- Tests for error cases (not found, duplicate URL, validation errors)
+- Tests verify async ingestion is triggered correctly
+- Tests use Arrange-Act-Assert pattern
+- Minimum 90% coverage for document handler module
+
+---
+
+## Feature 6: Conversation Handler Unit Tests
+### Description
+Add comprehensive unit tests for all conversation handlers (CreateConversationHandler, GetConversationHandler, ListConversationsHandler, DeleteConversationHandler, SendMessageHandler).
+
+### Acceptance Criteria
+- Tests for happy path of each handler
+- Tests for error cases (not found conversation, not found notebook)
+- Tests verify multi-turn conversation context is built correctly
+- Tests use mock RAG agent and retrieval service
+- Minimum 90% coverage for conversation handler module
+
+---
+
+## Feature 7: Evaluation Handler Unit Tests
+### Description
+Add comprehensive unit tests for evaluation handlers (GenerateDatasetHandler, RunEvaluationHandler, GetDatasetHandler, GetRunHandler, ListDatasetsHandler).
+
+### Acceptance Criteria
+- Tests for happy path of each handler
+- Tests for error cases (not found, invalid state, no chunks)
+- Tests verify metric calculations are aggregated correctly
+- Tests use mock repositories, generators, and retrieval service
+- Minimum 90% coverage for evaluation handler module
+
+---
+
+## Feature 8: Query Handler Unit Tests
+### Description
+Add comprehensive unit tests for QueryNotebookHandler.
+
+### Acceptance Criteria
+- Tests for happy path (question -> retrieval -> RAG answer)
+- Tests for not found notebook
+- Tests for empty retrieval results
+- Tests use mock retrieval service and RAG agent
+- Minimum 90% coverage for query handler module
+
+---
+
+## Feature 9: Retrieval Service Unit Tests
+### Description
+Add unit tests for RetrievalService which handles embedding generation, vector search, and document enrichment.
+
+### Acceptance Criteria
+- Tests for happy path (query -> embedding -> search -> enrichment)
+- Tests for empty results
+- Tests for missing documents in enrichment
+- Tests use mock embedding provider and repositories
+- Minimum 90% coverage for retrieval service
+
+---
+
+## Feature 10: Integration Tests for Core Workflows
+### Description
+Add integration tests that test the full workflow from API to database for core features: notebook CRUD, document ingestion, and query flow.
+
+### Acceptance Criteria
+- Integration test for notebook create -> add source -> query flow
+- Integration test for conversation create -> send message flow
+- Integration test for evaluation dataset generation -> run evaluation flow
+- Tests use testcontainers for PostgreSQL
+- Tests are clearly separated from unit tests in tests/integration/
+
+---
+
+## Feature 11: Chunk Handler and API Tests
+### Description
+Add unit tests for chunk handler and verify chunk listing API endpoint works correctly.
+
+### Acceptance Criteria
+- Tests for listing chunks by document
+- Tests for searching similar chunks
+- Tests for chunk with embedding operations
+- Minimum 80% coverage for chunk handler module
+
+---
+
+## Feature 12: CLI Command Tests
+### Description
+Add tests for CLI commands to ensure they correctly invoke handlers and format output.
+
+### Acceptance Criteria
+- Tests for notebook CLI commands (create, list)
+- Tests for source CLI commands (add, list)
+- Tests for query CLI command
+- Tests for evaluation CLI commands
+- Tests use typer.testing.CliRunner
