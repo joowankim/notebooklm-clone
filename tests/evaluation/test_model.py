@@ -156,6 +156,8 @@ class TestTestCaseResult:
             recall=1.0,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",
@@ -185,6 +187,8 @@ class TestRetrievalMetrics:
             hit_rate_at_k=0.80,
             mrr=0.65,
             k=5,
+            ndcg_at_k=0.75,
+            map_at_k=0.60,
         )
 
         assert metrics.precision_at_k == 0.24
@@ -192,11 +196,14 @@ class TestRetrievalMetrics:
         assert metrics.hit_rate_at_k == 0.80
         assert metrics.mrr == 0.65
         assert metrics.k == 5
+        assert metrics.ndcg_at_k == 0.75
+        assert metrics.map_at_k == 0.60
 
     def test_metrics_immutability(self) -> None:
         metrics = model.RetrievalMetrics(
             precision_at_k=0.5, recall_at_k=0.5,
             hit_rate_at_k=0.5, mrr=0.5, k=5,
+            ndcg_at_k=0.5, map_at_k=0.5,
         )
         with pytest.raises(Exception):
             metrics.precision_at_k = 1.0
@@ -322,12 +329,16 @@ class TestEvaluationRun:
             hit_rate_at_k=0.8,
             mrr=0.65,
             k=5,
+            ndcg_at_k=0.75,
+            map_at_k=0.60,
         )
         case_metrics = model.CaseMetrics(
             precision=0.2,
             recall=0.8,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",
@@ -351,6 +362,7 @@ class TestEvaluationRun:
         metrics = model.RetrievalMetrics(
             precision_at_k=0.0, recall_at_k=0.0,
             hit_rate_at_k=0.0, mrr=0.0, k=5,
+            ndcg_at_k=0.0, map_at_k=0.0,
         )
 
         with pytest.raises(Exception):
@@ -392,6 +404,8 @@ class TestEvaluationRun:
             hit_rate_at_k=0.8,
             mrr=0.65,
             k=5,
+            ndcg_at_k=0.75,
+            map_at_k=0.60,
         )
         generation_metrics = model.GenerationMetrics(
             mean_faithfulness=0.85,
@@ -402,6 +416,8 @@ class TestEvaluationRun:
             recall=0.8,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",
@@ -428,12 +444,16 @@ class TestEvaluationRun:
             hit_rate_at_k=0.8,
             mrr=0.65,
             k=5,
+            ndcg_at_k=0.75,
+            map_at_k=0.60,
         )
         case_metrics = model.CaseMetrics(
             precision=0.2,
             recall=0.8,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",
@@ -527,6 +547,8 @@ class TestTestCaseResultGeneration:
             recall=1.0,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         generation_metrics = model.GenerationCaseMetrics(
             faithfulness=0.85,
@@ -551,6 +573,8 @@ class TestTestCaseResultGeneration:
             recall=1.0,
             hit=True,
             reciprocal_rank=1.0,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",
@@ -569,6 +593,8 @@ class TestTestCaseResultGeneration:
             recall=0.5,
             hit=True,
             reciprocal_rank=0.5,
+            ndcg=0.0,
+            map_score=0.0,
         )
         result = model.TestCaseResult.create(
             test_case_id="tc1",

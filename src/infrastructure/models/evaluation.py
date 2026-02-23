@@ -34,6 +34,12 @@ class EvaluationDatasetSchema(database_module.Base):
     max_chunks_sample: sqlalchemy.orm.Mapped[int] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Integer, nullable=False, default=50
     )
+    expand_ground_truth: sqlalchemy.orm.Mapped[bool] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Boolean, nullable=False, default=False
+    )
+    similarity_threshold: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True, default=0.85
+    )
     error_message: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Text, nullable=True
     )
@@ -136,6 +142,36 @@ class EvaluationRunSchema(database_module.Base):
     mean_answer_relevancy: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Float, nullable=True
     )
+    ndcg_at_k: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    map_at_k: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    generation_model: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.String(100), nullable=True
+    )
+    mean_citation_precision: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    mean_citation_recall: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    mean_hallucination_rate: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    mean_answer_completeness: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    total_input_tokens: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    total_output_tokens: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    estimated_cost_usd: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
     error_message: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Text, nullable=True
     )
@@ -201,6 +237,39 @@ class EvaluationTestCaseResultSchema(database_module.Base):
         sqlalchemy.Float, nullable=True
     )
     answer_relevancy: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    ndcg: sqlalchemy.orm.Mapped[float] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=False, default=0.0
+    )
+    map_score: sqlalchemy.orm.Mapped[float] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=False, default=0.0
+    )
+    citation_precision: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    citation_recall: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    phantom_citation_count: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    citation_support_score: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    hallucination_rate: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    contradiction_count: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    fabrication_count: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    total_claims: sqlalchemy.orm.Mapped[int | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Integer, nullable=True
+    )
+    answer_completeness: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Float, nullable=True
     )
 

@@ -360,6 +360,7 @@ class EvaluationDataset(pydantic.BaseModel):
     questions_per_chunk: int
     max_chunks_sample: int
     expand_ground_truth: bool = False
+    similarity_threshold: float | None = 0.85
     error_message: str | None = None
     test_cases: tuple[TestCase, ...] = ()
     created_at: datetime.datetime

@@ -128,7 +128,7 @@ class TestChunkQualityReport:
     """Tests for ChunkQualityReport value object."""
 
     def test_create_chunk_quality_report(self) -> None:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         report = model.ChunkQualityReport(
             notebook_id="nb_001",
             total_chunks_analyzed=100,
@@ -150,7 +150,7 @@ class TestChunkQualityReport:
         assert report == expected
 
     def test_frozen(self) -> None:
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         report = model.ChunkQualityReport(
             notebook_id="nb_001",
             total_chunks_analyzed=50,
@@ -553,8 +553,8 @@ class TestEvaluationDatasetExtension:
             questions_per_chunk=2,
             max_chunks_sample=50,
             expand_ground_truth=True,
-            created_at=datetime.datetime.now(datetime.timezone.utc),
-            updated_at=datetime.datetime.now(datetime.timezone.utc),
+            created_at=datetime.datetime.now(datetime.UTC),
+            updated_at=datetime.datetime.now(datetime.UTC),
         )
         assert dataset.expand_ground_truth is True
 
