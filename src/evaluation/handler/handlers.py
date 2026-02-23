@@ -295,6 +295,8 @@ class RunEvaluationHandler:
             recall=metric_module.recall_at_k(retrieved_ids, relevant_ids, k),
             hit=metric_module.hit_at_k(retrieved_ids, relevant_ids, k),
             reciprocal_rank=metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k),
+            ndcg=metric_module.ndcg_at_k(retrieved_ids, relevant_ids, k),
+            map_score=metric_module.average_precision_at_k(retrieved_ids, relevant_ids, k),
         )
 
         return model.TestCaseResult.create(
@@ -319,6 +321,8 @@ class RunEvaluationHandler:
             recall=metric_module.recall_at_k(retrieved_ids, relevant_ids, k),
             hit=metric_module.hit_at_k(retrieved_ids, relevant_ids, k),
             reciprocal_rank=metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k),
+            ndcg=metric_module.ndcg_at_k(retrieved_ids, relevant_ids, k),
+            map_score=metric_module.average_precision_at_k(retrieved_ids, relevant_ids, k),
         )
 
     @staticmethod
@@ -335,12 +339,19 @@ class RunEvaluationHandler:
             precisions, recalls, hits, reciprocal_ranks
         )
 
+        ndcg_values = [r.ndcg for r in results]
+        map_values = [r.map_score for r in results]
+        mean_ndcg = sum(ndcg_values) / len(ndcg_values) if ndcg_values else 0.0
+        mean_map = sum(map_values) / len(map_values) if map_values else 0.0
+
         return model.RetrievalMetrics(
             precision_at_k=mean_p,
             recall_at_k=mean_r,
             hit_rate_at_k=hit_rate,
             mrr=mrr,
             k=k,
+            ndcg_at_k=mean_ndcg,
+            map_at_k=mean_map,
         )
 
 
