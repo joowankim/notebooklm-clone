@@ -1,0 +1,62 @@
+# Evaluation Documentation PRD
+
+## Overview
+Create documentation files in docs/evaluation/ directory explaining each evaluation method's concepts, usage, and result interpretation.
+
+## Context
+The evaluation module provides multiple assessment methods for RAG system quality. Each method needs clear documentation in Korean covering: concept explanation, metric definitions, API/CLI usage examples, and guidance on interpreting results. Documents should be written in Korean.
+
+## Key Reference Files
+- Domain models: src/evaluation/domain/model.py
+- Metrics: src/evaluation/domain/metric.py
+- Handlers: src/evaluation/handler/handlers.py
+- API: src/evaluation/entrypoint/api.py
+- CLI: src/cli/commands/evaluation.py
+- Schemas: src/evaluation/schema/command.py, src/evaluation/schema/response.py
+
+## Features
+
+### Feature 1: Write Retrieval Evaluation documentation
+Create docs/evaluation/retrieval-evaluation.md documenting the existing retrieval quality evaluation system. This document does not depend on any new implementation since the retrieval evaluation is already fully implemented.
+
+The document must include the following sections:
+1. Overview: What retrieval evaluation measures and why it matters for RAG systems
+2. Concepts: Explain the evaluation pipeline (dataset generation from chunks via LLM -> test case creation with ground truth -> retrieval execution -> metric computation)
+3. Metrics Explained: For each metric (Precision@k, Recall@k, Hit Rate@k, MRR), include mathematical formula, intuitive explanation, value range (0.0-1.0), and concrete interpretation examples (e.g., "Precision@5 = 0.4 means 2 out of 5 retrieved chunks were relevant")
+4. Usage Guide: Show API request/response examples for all 5 evaluation endpoints (generate dataset, list datasets, get dataset, run evaluation, get run results). Show CLI command examples for all 4 commands (generate, list, run, results) with sample outputs
+5. Parameter Tuning: Explain how k, questions_per_chunk, max_chunks_sample affect results
+6. Result Interpretation: Provide practical guidance - what score ranges indicate good/acceptable/poor retrieval, common patterns and their meanings, actionable improvement suggestions for low scores
+
+### Feature 2: Write Question Difficulty Classification documentation
+Create docs/evaluation/question-difficulty.md documenting the question difficulty classification feature. This depends on Task 25 (Phase 1 completion).
+
+The document must include:
+1. Overview: Why difficulty classification matters for granular evaluation analysis
+2. Difficulty Levels: Define each level (FACTUAL, ANALYTICAL, INFERENTIAL, PARAPHRASED) with concrete examples of each type of question
+3. How Classification Works: Explain that LLM assigns difficulty during synthetic test generation
+4. Metrics by Difficulty: Explain how aggregate metrics are computed per difficulty group
+5. Usage Guide: Show how difficulty appears in dataset detail API response and how metrics_by_difficulty appears in run detail response. Show CLI results command output with difficulty breakdown
+6. Result Interpretation: Guide users on what it means when certain difficulty types score lower (e.g., low PARAPHRASED scores suggest embedding model struggles with semantic similarity; low INFERENTIAL scores are expected and may not need action)
+
+### Feature 3: Write Generation Quality Evaluation documentation
+Create docs/evaluation/generation-evaluation.md documenting the LLM-as-Judge generation quality evaluation. This depends on Task 30 (Phase 2 completion).
+
+The document must include:
+1. Overview: Why evaluating answer generation quality matters beyond just retrieval
+2. Evaluation Types: Explain RETRIEVAL_ONLY vs FULL_RAG evaluation modes and when to use each
+3. Generation Metrics: For each metric (Faithfulness, Answer Relevancy), include concept definition, scoring methodology (LLM-as-Judge approach), value range (0.0-1.0), and concrete interpretation examples
+4. Full RAG Pipeline: Explain the complete evaluation flow (question -> retrieval -> answer generation -> LLM judge scoring) with a diagram or step description
+5. Usage Guide: Show API request with evaluation_type=full_rag. Show CLI run command with --type full_rag option. Show results output with both retrieval and generation metrics
+6. Result Interpretation: Guide on faithfulness vs relevancy tradeoffs. Common patterns (high relevancy but low faithfulness = hallucination risk, low relevancy = off-topic answers). Actionable suggestions for improvement
+7. Cost Considerations: Note that FULL_RAG uses additional LLM calls (RAG generation + 2 judge calls per test case) and estimated cost implications
+
+### Feature 4: Write Run Comparison documentation
+Create docs/evaluation/run-comparison.md documenting the run comparison feature. This depends on Task 33 (Phase 3 completion).
+
+The document must include:
+1. Overview: Why comparing evaluation runs is important for iterative RAG improvement
+2. Use Cases: A/B testing scenarios (different k values, embedding model changes, chunking strategy changes, prompt engineering changes)
+3. Comparison Mechanics: Explain that runs must share the same dataset and k value, metrics are aligned per-test-case across runs
+4. Usage Guide: Show API request with run_ids in POST /evaluation/compare. Show CLI compare command with multiple run IDs. Show sample Rich table output with side-by-side metrics
+5. Reading the Comparison: Explain aggregate metrics comparison (which run performed better overall) and per-test-case comparison (which specific questions improved or regressed)
+6. Practical Workflow: Step-by-step guide for a typical A/B test cycle (generate dataset once -> make system change -> run evaluation -> compare with baseline run -> iterate)

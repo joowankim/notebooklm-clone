@@ -1,0 +1,83 @@
+# Evaluation Module Enhancement PRD
+
+## Overview
+Enhance the existing evaluation module to provide deeper RAG system assessment through three features: question difficulty classification, generation quality evaluation (LLM-as-Judge), and run comparison.
+
+## Current State
+The evaluation module currently only measures Retrieval quality with 4 metrics (precision@k, recall@k, hit@k, MRR). It generates synthetic test cases from chunks using LLM and evaluates how well the retrieval service finds the correct chunks.
+
+## Architecture Context
+- DDD architecture with frozen Pydantic models, factory methods, state machines
+- Dependency injection via dependency-injector
+- FastAPI REST API + Typer CLI
+- SQLAlchemy async ORM with Alembic migrations
+- PydanticAI for LLM integration
+
+## Key Existing Files
+- Domain models: src/evaluation/domain/model.py
+- Metrics: src/evaluation/domain/metric.py
+- Mapper: src/evaluation/domain/mapper.py
+- Handlers: src/evaluation/handler/handlers.py
+- Generator: src/evaluation/adapter/generator.py
+- Repository: src/evaluation/adapter/repository.py
+- ORM: src/infrastructure/models/evaluation.py
+- DI: src/evaluation/dependency.py, src/dependency/container.py
+- API: src/evaluation/entrypoint/api.py
+- CLI: src/cli/commands/evaluation.py
+- Schemas: src/evaluation/schema/command.py, src/evaluation/schema/response.py
+- RAG Agent: src/query/adapter/pydantic_ai/agent.py (RAGAgent.answer())
+- Retrieval: src/query/service/retrieval.py (RetrievalService.retrieve())
+- Settings: src/settings.py (eval_model setting)
+
+## Implementation Phases (in order)
+
+### Phase 1: Question Difficulty Classification
+
+Add difficulty classification (FACTUAL, ANALYTICAL, INFERENTIAL, PARAPHRASED) to generated test cases, enabling per-difficulty metric analysis.
+
+**Feature 1: Add QuestionDifficulty enum and update TestCase model**
+Add QuestionDifficulty StrEnum to src/evaluation/domain/model.py with values FACTUAL, ANALYTICAL, INFERENTIAL, PARAPHRASED. Add optional difficulty field to TestCase entity and its create() factory method. Maintain backward compatibility with None default. Add unit tests for the new enum and model changes.
+
+**Feature 2: Add difficulty column to database**
+Create Alembic migration adding nullable difficulty column (String(20)) to evaluation_test_cases table. Update EvaluationTestCaseSchema ORM model in src/infrastructure/models/evaluation.py. Update DatasetMapper in src/evaluation/domain/mapper.py to handle difficulty serialization/deserialization.
+
+**Feature 3: Update SyntheticTestGenerator for difficulty classification**
+Modify SYSTEM_PROMPT and USER_PROMPT_TEMPLATE in src/evaluation/adapter/generator.py to instruct LLM to classify each question's difficulty. Change JSON response format to include difficulty per question. Update _parse_questions to extract difficulty alongside question text. Update generate_test_cases to pass difficulty to TestCase.create(). Add unit tests for the new parsing logic.
+
+**Feature 4: Add difficulty to response schemas and API**
+Add difficulty field to TestCaseResponse in src/evaluation/schema/response.py. Create DifficultyMetrics response model (difficulty, test_case_count, precision_at_k, recall_at_k, hit_rate_at_k, mrr). Add metrics_by_difficulty field to RunDetail response. Update TestCaseResponse.from_entity() to include difficulty.
+
+**Feature 5: Add difficulty breakdown to GetRunHandler**
+Add dataset_repository dependency to GetRunHandler in src/evaluation/handler/handlers.py. When building RunDetail, load the dataset to get test case difficulties, group results by difficulty, compute per-difficulty aggregate metrics. Update DI container (src/evaluation/dependency.py) to inject dataset_repository into get_run_handler. Update CLI results command to display difficulty breakdown table.
+
+### Phase 2: Generation Quality Evaluation (LLM-as-Judge)
+
+Add full RAG pipeline evaluation measuring answer faithfulness and relevancy.
+
+**Feature 6: Add generation-related domain models**
+Add EvaluationType StrEnum (RETRIEVAL_ONLY, FULL_RAG) to src/evaluation/domain/model.py. Add GenerationCaseMetrics frozen model (faithfulness, answer_relevancy). Add GenerationMetrics frozen model (mean_faithfulness, mean_answer_relevancy). Extend TestCaseResult with optional fields: generated_answer, faithfulness, answer_relevancy. Extend EvaluationRun with: evaluation_type, mean_faithfulness, mean_answer_relevancy. Update create() and mark_completed() factory/transition methods. Add unit tests.
+
+**Feature 7: Add generation columns to database**
+Create Alembic migration adding to evaluation_runs: evaluation_type (String(20), default "retrieval_only"), mean_faithfulness (Float, nullable), mean_answer_relevancy (Float, nullable). Adding to evaluation_test_case_results: generated_answer (Text, nullable), faithfulness (Float, nullable), answer_relevancy (Float, nullable). Update ORM models and mappers for new fields.
+
+**Feature 8: Implement LLMJudge adapter**
+Create src/evaluation/adapter/judge.py with LLMJudge class using PydanticAI Agent (same pattern as SyntheticTestGenerator). Implement score_faithfulness(question, answer, context_chunks) -> float method with dedicated system prompt that instructs LLM to evaluate grounding in context. Implement score_answer_relevancy(question, answer) -> float with dedicated prompt. Both return 0.0-1.0 scores via JSON parsing. Add aggregate_generation_metrics() to src/evaluation/domain/metric.py. Add unit tests with mocked LLM.
+
+**Feature 9: Extend RunEvaluationHandler for full RAG evaluation**
+Add rag_agent (RAGAgent) and llm_judge (LLMJudge) dependencies to RunEvaluationHandler. When evaluation_type is FULL_RAG, after retrieval also call rag_agent.answer() to generate answer, then call llm_judge for faithfulness and relevancy scores. Store generation metrics in TestCaseResult and aggregate in EvaluationRun. Update RunEvaluation command schema with evaluation_type field. Update RunDetail response schema with evaluation_type and generation metrics. Update DI container to wire RAGAgent and LLMJudge. Pass query_adapter to EvaluationContainer in src/dependency/container.py.
+
+**Feature 10: Update CLI for generation evaluation**
+Add --type option (retrieval_only|full_rag) to the run CLI command. Update results command to display generation metrics (Faithfulness, Answer Relevancy) when available.
+
+### Phase 3: Run Comparison
+
+Compare metrics across multiple evaluation runs on the same dataset.
+
+**Feature 11: Add RunRepository.list_by_ids and comparison response schemas**
+Add list_by_ids(run_ids) method to RunRepository in src/evaluation/adapter/repository.py. Create comparison response schemas in src/evaluation/schema/response.py: RunComparisonMetrics (per-run aggregate), TestCaseComparisonEntry (per-run per-case), TestCaseComparison (per-case across runs), RunComparisonResponse (complete comparison). Create CompareRuns command schema with run_ids field (min 2, max 10).
+
+**Feature 12: Implement CompareRunsHandler**
+Create CompareRunsHandler in src/evaluation/handler/handlers.py. Dependencies: run_repository, dataset_repository. Validate all runs belong to same dataset and are COMPLETED. Build per-run aggregate metrics and per-test-case cross-run comparison including difficulty labels from Phase 1 and generation metrics from Phase 2 when available. Add unit tests.
+
+**Feature 13: Add comparison API endpoint and CLI command**
+Add POST /evaluation/compare endpoint to src/evaluation/entrypoint/api.py accepting CompareRuns body. Add compare CLI command accepting multiple run IDs. Output Rich table showing side-by-side metrics comparison. Wire compare_runs_handler in DI container.
