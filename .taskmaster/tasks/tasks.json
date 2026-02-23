@@ -34,8 +34,9 @@
         "testStrategy": "Verify field validation with pydantic, test threshold bounds, ensure backward compatibility with existing datasets",
         "priority": "high",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.535Z"
       },
       {
         "id": "41",
@@ -110,8 +111,9 @@
         "testStrategy": "Validate ratio bounds, test multi-hop case count limits",
         "priority": "high",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.537Z"
       },
       {
         "id": "47",
@@ -226,8 +228,9 @@
         "dependencies": [
           "54"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.538Z"
       },
       {
         "id": "56",
@@ -313,8 +316,9 @@
         "testStrategy": "Schema validation tests for field constraints",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.539Z"
       },
       {
         "id": "63",
@@ -440,8 +444,9 @@
         "dependencies": [
           "69"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.540Z"
       },
       {
         "id": "73",
@@ -481,8 +486,9 @@
         "dependencies": [
           "74"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.541Z"
       },
       {
         "id": "76",
@@ -519,8 +525,9 @@
         "dependencies": [
           "76"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.542Z"
       },
       {
         "id": "79",
@@ -559,8 +566,9 @@
         "dependencies": [
           "80"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.543Z"
       },
       {
         "id": "82",
@@ -581,8 +589,9 @@
         "testStrategy": "Migration tests, model field validation",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.544Z"
       },
       {
         "id": "84",
@@ -608,8 +617,9 @@
         "dependencies": [
           "84"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.545Z"
       },
       {
         "id": "86",
@@ -647,8 +657,9 @@
         "dependencies": [
           "87"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.546Z"
       },
       {
         "id": "89",
@@ -669,8 +680,9 @@
         "testStrategy": "Model validation tests",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.547Z"
       },
       {
         "id": "91",
@@ -707,8 +719,9 @@
         "testStrategy": "Model validation tests",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.548Z"
       },
       {
         "id": "94",
@@ -757,8 +770,9 @@
         "testStrategy": "Schema validation, model field tests",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2026-02-23T14:19:44.549Z"
       },
       {
         "id": "98",
@@ -802,9 +816,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-02-23T14:04:01.034Z",
+      "lastModified": "2026-02-23T14:19:44.549Z",
       "taskCount": 63,
-      "completedCount": 13,
+      "completedCount": 27,
       "tags": [
         "master"
       ]
