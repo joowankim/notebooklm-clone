@@ -314,3 +314,341 @@ def phantom_citation_count(
     return sum(
         1 for idx in citation_indices if idx >= retrieved_chunk_count
     )
+
+
+def score_gap(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float | None:
+    """Mean score difference between GT and non-GT chunks.
+
+    Args:
+        retrieved_ids: List of retrieved chunk IDs.
+        retrieved_scores: Corresponding scores for each chunk.
+        relevant_ids: Set of relevant (ground truth) chunk IDs.
+
+    Returns:
+        Mean GT score minus mean non-GT score, or None if either group is empty.
+    """
+    gt_scores: list[float] = []
+    non_gt_scores: list[float] = []
+    for rid, score in zip(retrieved_ids, retrieved_scores):
+        if rid in relevant_ids:
+            gt_scores.append(score)
+        else:
+            non_gt_scores.append(score)
+    if not gt_scores or not non_gt_scores:
+        return None
+    mean_gt = sum(gt_scores) / len(gt_scores)
+    mean_non_gt = sum(non_gt_scores) / len(non_gt_scores)
+    return mean_gt - mean_non_gt
+
+
+def high_confidence_rate(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+    margin: float = 0.1,
+) -> float:
+    """Fraction where min GT score exceeds max non-GT score by margin.
+
+    Args:
+        retrieved_ids: List of retrieved chunk IDs.
+        retrieved_scores: Corresponding scores for each chunk.
+        relevant_ids: Set of relevant (ground truth) chunk IDs.
+        margin: Required score margin.
+
+    Returns:
+        1.0 if min GT > max non-GT + margin, else 0.0.
+        Returns 0.0 if either group is empty.
+    """
+    gt_scores: list[float] = []
+    non_gt_scores: list[float] = []
+    for rid, score in zip(retrieved_ids, retrieved_scores):
+        if rid in relevant_ids:
+            gt_scores.append(score)
+        else:
+            non_gt_scores.append(score)
+    if not gt_scores or not non_gt_scores:
+        return 0.0
+    min_gt = min(gt_scores)
+    max_non_gt = max(non_gt_scores)
+    return 1.0 if min_gt > max_non_gt + margin else 0.0
+
+
+def mean_relevant_score(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float:
+    """Mean score of relevant chunks.
+
+    Args:
+        retrieved_ids: List of retrieved chunk IDs.
+        retrieved_scores: Corresponding scores for each chunk.
+        relevant_ids: Set of relevant (ground truth) chunk IDs.
+
+    Returns:
+        Mean score of relevant chunks, or 0.0 if none found.
+    """
+    scores = [
+        score
+        for rid, score in zip(retrieved_ids, retrieved_scores)
+        if rid in relevant_ids
+    ]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def mean_irrelevant_score(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float:
+    """Mean score of irrelevant chunks.
+
+    Args:
+        retrieved_ids: List of retrieved chunk IDs.
+        retrieved_scores: Corresponding scores for each chunk.
+        relevant_ids: Set of relevant (ground truth) chunk IDs.
+
+    Returns:
+        Mean score of irrelevant chunks, or 0.0 if none found.
+    """
+    scores = [
+        score
+        for rid, score in zip(retrieved_ids, retrieved_scores)
+        if rid not in relevant_ids
+    ]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def pearson_correlation(
+    xs: list[float],
+    ys: list[float],
+) -> float | None:
+    """Pearson correlation coefficient.
+
+    Args:
+        xs: First list of values.
+        ys: Second list of values.
+
+    Returns:
+        Pearson r, or None if fewer than 3 data points or zero variance.
+    """
+    n = len(xs)
+    if n < 3:
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x == 0.0 or var_y == 0.0:
+        return None
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    return cov / math.sqrt(var_x * var_y)
+
+
+def bucket_generation_quality(
+    results: list[tuple[float, float, float]],
+) -> dict[str, tuple[float, float]]:
+    """Bucket generation quality by recall level.
+
+    Each result tuple is (recall, faithfulness, relevancy).
+    Buckets: recall=1.0 -> "perfect", 0<recall<1 -> "partial", recall=0 -> "missed".
+
+    Args:
+        results: List of (recall, faithfulness, relevancy) tuples.
+
+    Returns:
+        Dict mapping bucket name to (mean_faithfulness, mean_relevancy).
+    """
+    buckets: dict[str, list[tuple[float, float]]] = {}
+    for recall, faithfulness, relevancy in results:
+        if recall == 1.0:
+            label = "perfect"
+        elif recall == 0.0:
+            label = "missed"
+        else:
+            label = "partial"
+        if label not in buckets:
+            buckets[label] = []
+        buckets[label].append((faithfulness, relevancy))
+    output: dict[str, tuple[float, float]] = {}
+    for label, pairs in buckets.items():
+        mean_f = sum(f for f, _ in pairs) / len(pairs)
+        mean_r = sum(r for _, r in pairs) / len(pairs)
+        output[label] = (mean_f, mean_r)
+    return output
+
+
+def answer_consistency(
+    embeddings: list[list[float]],
+) -> float:
+    """Mean pairwise cosine similarity of embeddings.
+
+    Args:
+        embeddings: List of embedding vectors.
+
+    Returns:
+        Mean pairwise cosine similarity, or 0.0 for single/empty list.
+    """
+    n = len(embeddings)
+    if n < 2:
+        return 0.0
+    total = 0.0
+    count = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            total += cosine_similarity(embeddings[i], embeddings[j])
+            count += 1
+    if count == 0:
+        return 0.0
+    return total / count
+
+
+def aggregate_ndcg_map(
+    ndcgs: list[float],
+    map_scores: list[float],
+) -> tuple[float, float]:
+    """Calculate mean NDCG and MAP.
+
+    Args:
+        ndcgs: Per-case NDCG values.
+        map_scores: Per-case MAP values.
+
+    Returns:
+        Tuple of (mean_ndcg, mean_map).
+    """
+    if not ndcgs:
+        return (0.0, 0.0)
+    mean_ndcg = sum(ndcgs) / len(ndcgs)
+    mean_map = sum(map_scores) / len(map_scores)
+    return (mean_ndcg, mean_map)
+
+
+def aggregate_citation_metrics(
+    citation_precisions: list[float],
+    citation_recalls: list[float],
+    phantom_counts: list[int],
+) -> tuple[float, float, float]:
+    """Mean citation precision, recall, and phantom count.
+
+    Args:
+        citation_precisions: Per-case citation precision values.
+        citation_recalls: Per-case citation recall values.
+        phantom_counts: Per-case phantom citation counts.
+
+    Returns:
+        Tuple of (mean_precision, mean_recall, mean_phantom_count).
+    """
+    if not citation_precisions:
+        return (0.0, 0.0, 0.0)
+    n = len(citation_precisions)
+    mean_p = sum(citation_precisions) / n
+    mean_r = sum(citation_recalls) / n
+    mean_ph = sum(phantom_counts) / n
+    return (mean_p, mean_r, mean_ph)
+
+
+def intra_document_similarity(
+    embeddings_by_doc: dict[str, list[list[float]]],
+) -> float:
+    """Mean pairwise cosine similarity within each document.
+
+    For each document, computes all pairwise similarities among its
+    embeddings and averages across all pairs across all documents.
+
+    Args:
+        embeddings_by_doc: Mapping of document ID to list of embeddings.
+
+    Returns:
+        Mean intra-document similarity, or 0.0 if no valid pairs exist.
+    """
+    total = 0.0
+    count = 0
+    for embeddings in embeddings_by_doc.values():
+        n = len(embeddings)
+        for i in range(n):
+            for j in range(i + 1, n):
+                total += cosine_similarity(embeddings[i], embeddings[j])
+                count += 1
+    if count == 0:
+        return 0.0
+    return total / count
+
+
+def inter_document_similarity(
+    embeddings_by_doc: dict[str, list[list[float]]],
+) -> float:
+    """Mean pairwise cosine similarity across different documents.
+
+    For each pair of documents, compares each embedding from one document
+    with each embedding from the other and averages all cross-document pairs.
+
+    Args:
+        embeddings_by_doc: Mapping of document ID to list of embeddings.
+
+    Returns:
+        Mean inter-document similarity, or 0.0 if fewer than 2 documents.
+    """
+    doc_keys = list(embeddings_by_doc.keys())
+    if len(doc_keys) < 2:
+        return 0.0
+    total = 0.0
+    count = 0
+    for i in range(len(doc_keys)):
+        for j in range(i + 1, len(doc_keys)):
+            embs_a = embeddings_by_doc[doc_keys[i]]
+            embs_b = embeddings_by_doc[doc_keys[j]]
+            for vec_a in embs_a:
+                for vec_b in embs_b:
+                    total += cosine_similarity(vec_a, vec_b)
+                    count += 1
+    if count == 0:
+        return 0.0
+    return total / count
+
+
+def separation_ratio(intra: float, inter: float) -> float:
+    """Ratio of intra-document to inter-document similarity.
+
+    Higher values indicate documents are internally coherent but
+    distinct from each other.
+
+    Args:
+        intra: Intra-document similarity score.
+        inter: Inter-document similarity score.
+
+    Returns:
+        intra / inter, or 0.0 if inter is zero.
+    """
+    if inter == 0.0:
+        return 0.0
+    return intra / inter
+
+
+def adjacent_chunk_similarity(
+    ordered_embeddings: list[list[float]],
+) -> float:
+    """Mean cosine similarity between consecutive embedding pairs.
+
+    Args:
+        ordered_embeddings: Ordered list of embedding vectors.
+
+    Returns:
+        Mean similarity of adjacent pairs, or 0.0 if fewer than 2.
+    """
+    n = len(ordered_embeddings)
+    if n < 2:
+        return 0.0
+    total = 0.0
+    for i in range(n - 1):
+        total += cosine_similarity(
+            ordered_embeddings[i], ordered_embeddings[i + 1]
+        )
+    return total / (n - 1)
