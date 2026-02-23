@@ -1,0 +1,1071 @@
+# Evaluation V2 PRD: RAG 평가 고도화
+
+## Overview
+
+현재 evaluation 모듈(Phase 1-3)은 단일 청크 기반 ground truth, 이진 관련성 메트릭, citation 미평가, 단일 float faithfulness 등의 근본적 한계를 가짐. 이 PRD는 13개 제안을 6개 Phase(4-9)로 구조화하여 RAG 평가를 체계적으로 고도화함.
+
+## Current State (Phase 1-3 완료)
+
+- Phase 1: 질문 난이도 분류 (FACTUAL, ANALYTICAL, INFERENTIAL, PARAPHRASED)
+- Phase 2: Generation 품질 평가 (Faithfulness, Answer Relevancy via LLM-as-Judge)
+- Phase 3: Run 비교 (동일 데이터셋 내 다중 Run 메트릭 비교)
+
+현재 도메인 모델: TestCase(question, ground_truth_chunk_ids, source_chunk_id, difficulty), TestCaseResult(retrieved_chunk_ids, retrieved_scores, precision, recall, hit, reciprocal_rank, generated_answer, faithfulness, answer_relevancy), EvaluationRun(k, evaluation_type, aggregate metrics), EvaluationDataset(test_cases).
+
+## Architecture Context
+
+DDD layered architecture with frozen Pydantic models, factory methods, state machines. Dependency injection via dependency-injector. FastAPI REST API + Typer CLI. SQLAlchemy async ORM with Alembic migrations. PydanticAI for LLM integration.
+
+## Key Existing Files
+
+- Domain models: src/evaluation/domain/model.py (QuestionDifficulty, EvaluationType, DatasetStatus, RunStatus, RetrievalMetrics, TestCase, CaseMetrics, GenerationCaseMetrics, GenerationMetrics, TestCaseResult, EvaluationDataset, EvaluationRun)
+- Metrics: src/evaluation/domain/metric.py (precision_at_k, recall_at_k, hit_at_k, reciprocal_rank, aggregate_metrics, aggregate_generation_metrics)
+- Mapper: src/evaluation/domain/mapper.py (DatasetMapper, RunMapper)
+- Handlers: src/evaluation/handler/handlers.py (GenerateDatasetHandler, RunEvaluationHandler, GetDatasetHandler, GetRunHandler, CompareRunsHandler, ListDatasetsHandler)
+- Generator: src/evaluation/adapter/generator.py (SyntheticTestGenerator)
+- LLM Judge: src/evaluation/adapter/judge.py (LLMJudge with score_faithfulness, score_answer_relevancy)
+- Repository: src/evaluation/adapter/repository.py (DatasetRepository, RunRepository)
+- ORM: src/infrastructure/models/evaluation.py (EvaluationDatasetSchema, EvaluationTestCaseSchema, EvaluationRunSchema, EvaluationTestCaseResultSchema)
+- DI: src/evaluation/dependency.py (EvaluationAdapterContainer, EvaluationHandlerContainer, EvaluationContainer)
+- DI root: src/dependency/container.py
+- API: src/evaluation/entrypoint/api.py (6 endpoints)
+- CLI: src/cli/commands/evaluation.py
+- Schemas: src/evaluation/schema/command.py (GenerateDataset, RunEvaluation, CompareRuns), src/evaluation/schema/response.py (TestCaseResponse, DatasetSummary, DatasetDetail, TestCaseResultResponse, MetricsResponse, DifficultyMetrics, RunDetail, RunComparisonMetrics, TestCaseComparisonEntry, TestCaseComparison, RunComparisonResponse, DatasetId, RunId)
+- RAG Agent: src/query/adapter/pydantic_ai/agent.py (RAGAgent.answer() -> QueryAnswer with answer, citations, sources_used)
+- Citation model: src/query/schema/response.py (Citation with citation_index, document_id, chunk_id, document_title, document_url, char_start, char_end, snippet)
+- Retrieval: src/query/service/retrieval.py (RetrievalService.retrieve() -> list[RetrievedChunk])
+- Chunk model: src/chunk/domain/model.py (Chunk with id, document_id, content, chunk_index, token_count, embedding)
+- Embedding: src/chunk/adapter/embedding/port.py (EmbeddingProviderPort), src/chunk/adapter/embedding/openai_embedding.py (OpenAIEmbeddingProvider)
+- Chunk repository: src/chunk/adapter/repository.py (search_similar_in_notebook)
+- Settings: src/settings.py (eval_model setting)
+
+## Implementation Phases
+
+---
+
+### Phase 4: Ground Truth 고도화 (A1, A2)
+
+#### Feature 14: Ground Truth 확장 - 인접 청크 포함 (A1)
+
+현재 TestCase.ground_truth_chunk_ids는 항상 단일 원본 청크 ID만 포함. chunk_overlap=200 토큰이므로 인접 청크에도 정답의 일부가 있지만, 이를 검색해도 "틀림"으로 처리됨. 확장된 ground truth는 모든 기존 retrieval 메트릭을 더 현실적으로 만듦.
+
+**14-1. GroundTruthExpander 어댑터 생성**
+
+새 파일 src/evaluation/adapter/ground_truth.py 생성. GroundTruthExpander 클래스:
+- __init__(self, chunk_repository: ChunkRepository, embedding_provider: EmbeddingProviderPort) -> None
+- expand(self, test_cases: tuple[TestCase, ...], notebook_id: str) -> tuple[TestCase, ...]: 각 TestCase에 대해 ground truth를 확장하여 새 tuple 반환.
+- _expand_adjacent(self, source_chunk_id: str, chunks_by_document: dict[str, list[Chunk]]) -> tuple[str, ...]: source_chunk의 document_id로 같은 문서 청크를 조회, chunk_index ± 1인 청크 ID를 반환.
+- _expand_semantic(self, source_chunk: Chunk, all_chunks: list[Chunk], threshold: float) -> tuple[str, ...]: source_chunk 임베딩과 모든 청크 임베딩을 cosine 유사도 비교, threshold(기본 0.85) 이상인 청크 ID를 반환.
+
+내부 구현:
+- notebook_id로 모든 청크를 조회 (기존 chunk_repository 사용)
+- 청크를 document_id 기준으로 그룹핑
+- 각 test case의 source_chunk_id로 원본 청크를 찾음
+- 인접 확장: 같은 문서 내 chunk_index ± 1
+- 의미적 확장: cosine 유사도 > threshold
+- 중복 제거 후 ground_truth_chunk_ids 업데이트
+- TestCase는 frozen이므로 model_copy(update={"ground_truth_chunk_ids": expanded_ids})로 새 인스턴스 반환
+
+cosine 유사도 계산은 순수 함수로 src/evaluation/domain/metric.py에 추가:
+- cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float
+
+테스트: tests/evaluation/adapter/test_ground_truth.py - 인접 확장/의미적 확장 로직 검증
+
+**14-2. GenerateDataset 커맨드에 expand_ground_truth 옵션 추가**
+
+src/evaluation/schema/command.py의 GenerateDataset에 필드 추가:
+- expand_ground_truth: bool = pydantic.Field(default=False, description="인접/유사 청크로 ground truth 확장")
+- similarity_threshold: float = pydantic.Field(default=0.85, ge=0.5, le=1.0, description="의미적 확장 cosine 유사도 임계값")
+
+**14-3. GenerateDatasetHandler에서 ground truth 확장 실행**
+
+src/evaluation/handler/handlers.py의 GenerateDatasetHandler.__init__에 ground_truth_expander: GroundTruthExpander 의존성 추가 (Optional, None 가능).
+
+handle() 메서드에서 test_cases 생성 후 cmd.expand_ground_truth가 True이면:
+- self._ground_truth_expander.expand(test_cases, notebook_id) 호출
+- 확장된 test_cases로 dataset.mark_completed() 호출
+
+**14-4. DI 컨테이너에 GroundTruthExpander 등록**
+
+src/evaluation/dependency.py의 EvaluationAdapterContainer에 ground_truth_expander 프로바이더 추가:
+- ground_truth_expander = providers.Factory(GroundTruthExpander, chunk_repository=chunk_adapter.repository, embedding_provider=...) (chunk_adapter에서 embedding_provider도 주입)
+
+EvaluationHandlerContainer의 generate_dataset_handler에 ground_truth_expander 의존성 추가.
+
+**14-5. API & CLI 업데이트**
+
+src/evaluation/entrypoint/api.py: generate_dataset 엔드포인트에 expand_ground_truth, similarity_threshold 지원 (이미 GenerateDataset 커맨드에 포함되어 자동 반영).
+
+src/cli/commands/evaluation.py: generate_dataset 커맨드에 --expand-ground-truth, --similarity-threshold 옵션 추가.
+
+**14-6. Delta 메트릭 계산**
+
+GetRunHandler에서 확장 전후 delta를 표시할 필요는 없음 (확장은 데이터셋 생성 시점에 적용). 다만 DatasetDetail 응답에 is_expanded: bool 필드를 추가하여 확장 여부를 표시.
+
+src/evaluation/domain/model.py의 EvaluationDataset에 expand_ground_truth: bool = False 필드 추가.
+src/infrastructure/models/evaluation.py의 EvaluationDatasetSchema에 expand_ground_truth 컬럼 추가 (Boolean, default=False).
+Alembic 마이그레이션 생성.
+src/evaluation/domain/mapper.py의 DatasetMapper 업데이트.
+src/evaluation/schema/response.py의 DatasetSummary, DatasetDetail에 expand_ground_truth 필드 추가.
+
+테스트: tests/evaluation/handler/test_generate_dataset_expand.py - 확장 옵션 on/off 핸들러 테스트
+
+---
+
+#### Feature 15: Multi-Hop 평가 (A2)
+
+실제 사용자 질문은 여러 청크의 정보를 종합해야 하는 경우가 많음. 이를 평가하기 위해 다중 청크 기반 질문 생성 기능 추가.
+
+**15-1. QuestionDifficulty에 MULTI_HOP 추가**
+
+src/evaluation/domain/model.py의 QuestionDifficulty StrEnum에 MULTI_HOP = "multi_hop" 추가.
+기존 difficulty 컬럼(String(20))은 이미 nullable이므로 DB 마이그레이션 불필요 (값만 추가).
+
+**15-2. MultiHopTestGenerator 어댑터 생성**
+
+새 파일 src/evaluation/adapter/multi_hop_generator.py 생성. MultiHopTestGenerator 클래스:
+- __init__(self, eval_model: str = "openai:gpt-4o-mini") -> None: PydanticAI Agent 초기화
+- generate_multi_hop_cases(self, chunks: list[Chunk], max_cases: int = 10) -> list[TestCase]: 다중 청크 질문 생성
+- _group_chunks_for_multi_hop(self, chunks: list[Chunk]) -> list[tuple[Chunk, ...]]: 같은 문서 내 청크를 2-3개씩 그룹핑 (인접 + 원거리 조합)
+- _generate_multi_hop_question(self, chunk_group: tuple[Chunk, ...]) -> tuple[str, str] | None: LLM으로 다중 청크 질문 생성
+
+프롬프트 설계:
+- 시스템: "You are generating questions that require information from ALL provided passages to answer. The question must not be answerable from any single passage alone."
+- 유저: 복수 청크 내용 + "Generate a question requiring information from all passages. Return JSON: {\"question\": \"...\", \"difficulty\": \"multi_hop\"}"
+
+각 생성된 TestCase의 ground_truth_chunk_ids = tuple(chunk.id for chunk in chunk_group).
+
+**15-3. GenerateDataset 커맨드에 multi_hop 설정 추가**
+
+src/evaluation/schema/command.py의 GenerateDataset에 필드 추가:
+- multi_hop_ratio: float = pydantic.Field(default=0.0, ge=0.0, le=1.0, description="Multi-hop 질문 비율 (0.0 = 비활성)")
+- multi_hop_max_cases: int = pydantic.Field(default=10, ge=1, le=50, description="최대 multi-hop 질문 수")
+
+**15-4. GenerateDatasetHandler에서 multi-hop 질문 병합**
+
+handle() 메서드에서:
+1. 기존 single-chunk 질문 생성 (기존 로직)
+2. cmd.multi_hop_ratio > 0 이면 MultiHopTestGenerator로 multi-hop 질문 생성
+3. 두 질문 세트를 비율에 맞게 병합
+4. 확장된 test_cases로 dataset.mark_completed() 호출
+
+**15-5. DI, API, CLI 업데이트**
+
+src/evaluation/dependency.py: multi_hop_generator 프로바이더 추가 (Singleton, eval_model 주입).
+GenerateDatasetHandler.__init__에 multi_hop_generator 의존성 추가.
+CLI: --multi-hop-ratio, --multi-hop-max-cases 옵션 추가.
+
+**15-6. Multi-Hop 전용 메트릭: Complete Context Rate**
+
+src/evaluation/domain/metric.py에 순수 함수 추가:
+- complete_context_rate(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float: top-k에서 모든 GT 청크를 찾은 비율. 모든 relevant_id가 top_k에 있으면 1.0, 아니면 0.0.
+
+GetRunHandler에서 difficulty가 MULTI_HOP인 경우 별도 메트릭 집계:
+- DifficultyMetrics에 complete_context_rate: float | None = None 필드 추가.
+
+테스트: tests/evaluation/adapter/test_multi_hop_generator.py, tests/evaluation/domain/test_metric_complete_context.py
+
+---
+
+### Phase 5: 고급 검색 메트릭 (A3, A4)
+
+#### Feature 16: NDCG & MAP 메트릭 추가 (A3)
+
+현재 메트릭은 이진 관련성만 고려. 랭킹 순서의 품질을 측정하는 표준 IR 메트릭 추가. LLM 호출 없음, 순수 계산.
+
+**16-1. 순수 메트릭 함수 추가**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def ndcg_at_k(
+    retrieved_ids: list[str],
+    relevant_ids: set[str],
+    k: int,
+) -> float:
+    """Calculate Normalized Discounted Cumulative Gain @k.
+    Binary relevance: 1 if relevant, 0 otherwise.
+    DCG = sum(rel_i / log2(i+1)) for i in 1..k
+    IDCG = sum(1 / log2(i+1)) for i in 1..min(k, |relevant_ids|)
+    """
+
+def average_precision_at_k(
+    retrieved_ids: list[str],
+    relevant_ids: set[str],
+    k: int,
+) -> float:
+    """Calculate Average Precision @k.
+    AP = (1/|relevant_ids|) * sum(precision@i * rel_i) for i in 1..k
+    """
+```
+
+두 함수 모두 기존 함수와 동일한 시그니처 패턴 (retrieved_ids, relevant_ids, k).
+
+**16-2. 도메인 모델 업데이트**
+
+src/evaluation/domain/model.py:
+- RetrievalMetrics에 필드 추가: ndcg_at_k: float, map_at_k: float
+- TestCaseResult에 필드 추가: ndcg: float = 0.0, map_score: float = 0.0
+- CaseMetrics에 필드 추가: ndcg: float, map_score: float
+- TestCaseResult.create()에서 metrics.ndcg, metrics.map_score 반영
+
+**16-3. DB 마이그레이션**
+
+Alembic 마이그레이션 생성:
+- evaluation_runs 테이블에 nullable Float 컬럼 추가: ndcg_at_k, map_at_k
+- evaluation_test_case_results 테이블에 Float 컬럼 추가: ndcg (default 0.0), map_score (default 0.0)
+
+src/infrastructure/models/evaluation.py:
+- EvaluationRunSchema에 ndcg_at_k, map_at_k (Float, nullable) 추가
+- EvaluationTestCaseResultSchema에 ndcg, map_score (Float, default=0.0) 추가
+
+**16-4. Mapper, Handler, Response 업데이트**
+
+src/evaluation/domain/mapper.py: RunMapper에 ndcg_at_k, map_at_k 필드 매핑 추가. result_to_record에 ndcg, map_score 추가.
+
+src/evaluation/handler/handlers.py:
+- _compute_case_metrics()에서 ndcg_at_k(), average_precision_at_k() 호출하여 CaseMetrics 생성 시 포함.
+- _compute_aggregate_metrics()에서 ndcg, map_score 집계: 평균 계산.
+- RetrievalMetrics 생성 시 ndcg_at_k, map_at_k 포함.
+
+src/evaluation/domain/metric.py의 aggregate_metrics 시그니처 확장:
+- 기존: aggregate_metrics(precisions, recalls, hits, reciprocal_ranks) -> tuple[4]
+- 변경: aggregate_metrics(precisions, recalls, hits, reciprocal_ranks, ndcgs: list[float] | None = None, map_scores: list[float] | None = None) -> tuple[4] | tuple[6]
+  - 하위 호환성을 위해 ndcgs/map_scores가 None이면 기존 tuple[4] 반환, 제공되면 tuple[6] 반환.
+  - 또는 별도 함수: aggregate_retrieval_metrics_v2() 생성.
+
+대안 (더 깔끔): aggregate_metrics 시그니처는 유지하고, 새로운 집계 함수 추가:
+```python
+def aggregate_ndcg_map(
+    ndcgs: list[float],
+    map_scores: list[float],
+) -> tuple[float, float]:
+    """Calculate mean NDCG and MAP."""
+```
+
+src/evaluation/schema/response.py:
+- MetricsResponse에 ndcg_at_k: float, map_at_k: float 추가
+- RunDetail.from_entity()에서 새 필드 매핑
+- TestCaseResultResponse에 ndcg: float = 0.0, map_score: float = 0.0 추가
+- RunComparisonMetrics에 ndcg_at_k: float, map_at_k: float 추가
+- TestCaseComparisonEntry에 ndcg: float = 0.0, map_score: float = 0.0 추가
+- DifficultyMetrics에 ndcg_at_k: float, map_at_k: float 추가
+
+CLI: 결과 테이블에 NDCG@k, MAP@k 컬럼 추가.
+
+EvaluationRun에 ndcg_at_k: float | None = None, map_at_k: float | None = None 필드 추가.
+EvaluationRun.mark_completed()에서 metrics.ndcg_at_k, metrics.map_at_k 반영.
+
+CompareRunsHandler._build_aggregate_metrics()에서 ndcg_at_k, map_at_k 포함.
+
+테스트: tests/evaluation/domain/test_metric_ndcg_map.py - 다양한 랭킹 시나리오 검증
+
+---
+
+#### Feature 17: Retrieval Score 분포 분석 (A4)
+
+TestCaseResult.retrieved_scores가 저장되지만 분석되지 않음. 기존 데이터만으로 검색 신뢰도 인사이트 제공.
+
+**17-1. Score 분포 분석 함수 추가**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def score_gap(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float | None:
+    """Calculate mean score gap between GT and non-GT chunks.
+    Returns None if either group is empty.
+    """
+
+def high_confidence_rate(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+    margin: float = 0.1,
+) -> float:
+    """Fraction of cases where GT chunk score exceeds all non-GT scores by margin."""
+
+def mean_relevant_score(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float:
+    """Mean score of relevant (GT) chunks in retrieved results."""
+
+def mean_irrelevant_score(
+    retrieved_ids: list[str],
+    retrieved_scores: list[float],
+    relevant_ids: set[str],
+) -> float:
+    """Mean score of irrelevant (non-GT) chunks in retrieved results."""
+```
+
+**17-2. Score 분포 메트릭 밸류 오브젝트**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class ScoreDistributionMetrics(pydantic.BaseModel):
+    """Score distribution analysis metrics."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    mean_score_gap: float | None
+    high_confidence_rate: float
+    mean_relevant_score: float
+    mean_irrelevant_score: float
+```
+
+**17-3. GetRunHandler에서 Score 분포 계산**
+
+GetRunHandler.handle()에서 run 결과를 받은 후:
+1. 각 test_case_result의 retrieved_ids, retrieved_scores, ground_truth_chunk_ids로 per-case score 분포 계산
+2. 전체 run에 대해 집계
+3. RunDetail 응답에 score_distribution: ScoreDistributionMetrics | None 필드 추가
+
+src/evaluation/schema/response.py:
+- ScoreDistributionResponse 모델 추가 (mean_score_gap, high_confidence_rate, mean_relevant_score, mean_irrelevant_score)
+- RunDetail에 score_distribution: ScoreDistributionResponse | None = None 추가
+
+이 분석은 GetRunHandler에서 기존 저장 데이터로 **런타임에** 계산하므로 DB 스키마 변경 불필요.
+Dataset의 test_cases에서 ground_truth_chunk_ids를 가져와야 하므로 dataset_repository 의존성은 이미 있음.
+
+CLI: 결과 표시 시 score 분포 섹션 추가.
+
+테스트: tests/evaluation/domain/test_metric_score_distribution.py, tests/evaluation/handler/test_get_run_score_distribution.py
+
+---
+
+### Phase 6: 파이프라인 품질 진단 (A5, A6)
+
+#### Feature 18: 청킹 품질 평가 (A5)
+
+청크 분할 품질을 LLM 기반으로 평가. 독립된 평가 파이프라인으로 구현.
+
+**18-1. ChunkQualityMetrics 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class ChunkQualityMetrics(pydantic.BaseModel):
+    """Quality metrics for a single chunk."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    chunk_id: str
+    boundary_coherence: float  # 0.0-1.0: 자연스러운 시작/끝
+    self_containment: float    # 0.0-1.0: 외부 맥락 없이 이해 가능
+    information_density: float # 0.0-1.0: 의미 있는 정보 비율
+
+class ChunkQualityReport(pydantic.BaseModel):
+    """Aggregated chunk quality report for a notebook."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    notebook_id: str
+    total_chunks_analyzed: int
+    mean_boundary_coherence: float
+    mean_self_containment: float
+    mean_information_density: float
+    low_quality_chunk_ids: tuple[str, ...]  # 기준치 미달 청크
+    created_at: datetime.datetime
+```
+
+**18-2. ChunkQualityEvaluator 어댑터**
+
+새 파일 src/evaluation/adapter/chunk_quality.py 생성. ChunkQualityEvaluator 클래스:
+- __init__(self, eval_model: str = "openai:gpt-4o-mini") -> None: PydanticAI Agent 초기화
+- evaluate_chunk(self, chunk: Chunk) -> ChunkQualityMetrics: 단일 청크 품질 평가
+- evaluate_chunks(self, chunks: list[Chunk], sample_size: int = 30) -> list[ChunkQualityMetrics]: 샘플링 후 일괄 평가
+
+프롬프트:
+- 시스템: "You evaluate text chunk quality for RAG systems. Assess boundary coherence, self-containment, and information density."
+- 유저: 청크 내용 + "Evaluate this text chunk. Return JSON: {\"boundary_coherence\": 0.0-1.0, \"self_containment\": 0.0-1.0, \"information_density\": 0.0-1.0, \"reasoning\": \"...\"}"
+
+**18-3. EvaluateChunkQualityHandler 핸들러**
+
+src/evaluation/handler/handlers.py에 EvaluateChunkQualityHandler 추가:
+- __init__(self, notebook_repository, document_repository, chunk_repository, chunk_quality_evaluator) -> None
+- handle(self, cmd: EvaluateChunkQuality) -> ChunkQualityReportResponse: 노트북 청크 샘플링 → 평가 → 보고서 생성
+
+**18-4. 커맨드, 응답 스키마**
+
+src/evaluation/schema/command.py에 추가:
+```python
+class EvaluateChunkQuality(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    sample_size: int = pydantic.Field(default=30, ge=5, le=200)
+    low_quality_threshold: float = pydantic.Field(default=0.5, ge=0.0, le=1.0)
+```
+
+src/evaluation/schema/response.py에 추가:
+- ChunkQualityMetricsResponse(chunk_id, boundary_coherence, self_containment, information_density)
+- ChunkQualityReportResponse(notebook_id, total_chunks_analyzed, mean_boundary_coherence, mean_self_containment, mean_information_density, low_quality_chunks: list[ChunkQualityMetricsResponse])
+
+**18-5. API, CLI, DI**
+
+API: POST /api/v1/notebooks/{notebook_id}/evaluation/chunk-quality 엔드포인트 추가.
+CLI: ntlm evaluation chunk-quality <notebook_id> 커맨드 추가.
+DI: chunk_quality_evaluator 프로바이더, evaluate_chunk_quality_handler 프로바이더 추가.
+
+청킹 품질 보고서는 DB에 저장하지 않음 (일회성 분석). 필요 시 향후 저장 기능 추가 가능.
+
+테스트: tests/evaluation/adapter/test_chunk_quality.py, tests/evaluation/handler/test_chunk_quality_handler.py
+
+---
+
+#### Feature 19: 임베딩 공간 품질 분석 (A6)
+
+임베딩 모델이 현재 코퍼스에 적합한지 분석. 기존 저장된 임베딩으로 계산하여 추가 API 호출 최소화.
+
+**19-1. 임베딩 품질 메트릭 함수**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def intra_document_similarity(
+    embeddings_by_doc: dict[str, list[list[float]]],
+) -> float:
+    """Mean cosine similarity between chunks within the same document."""
+
+def inter_document_similarity(
+    embeddings_by_doc: dict[str, list[list[float]]],
+) -> float:
+    """Mean cosine similarity between chunks from different documents."""
+
+def separation_ratio(intra: float, inter: float) -> float:
+    """Ratio of intra-document to inter-document similarity. Higher = better separation."""
+
+def adjacent_chunk_similarity(
+    chunks_ordered: list[tuple[str, list[float]]],
+) -> float:
+    """Mean cosine similarity between consecutive chunks (by chunk_index) in same document."""
+```
+
+cosine_similarity 함수는 Feature 14에서 이미 추가됨.
+
+**19-2. EmbeddingQualityMetrics 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class EmbeddingQualityMetrics(pydantic.BaseModel):
+    """Embedding space quality analysis metrics."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    intra_document_similarity: float
+    inter_document_similarity: float
+    separation_ratio: float
+    adjacent_chunk_similarity: float
+    total_documents: int
+    total_chunks: int
+```
+
+**19-3. AnalyzeEmbeddingQualityHandler 핸들러**
+
+src/evaluation/handler/handlers.py에 AnalyzeEmbeddingQualityHandler 추가:
+- __init__(self, notebook_repository, chunk_repository) -> None
+- handle(self, notebook_id: str) -> EmbeddingQualityResponse: 노트북 청크 임베딩 로드 → 메트릭 계산 → 응답 반환
+
+구현:
+1. 노트북 존재 확인
+2. 청크 조회 (임베딩 포함)
+3. document_id 기준으로 그룹핑
+4. 각 메트릭 함수 호출
+5. 응답 생성
+
+대규모 노트북을 위한 최적화: 문서당 최대 N개 청크 샘플링, 문서 간 비교 시 샘플링 적용.
+
+**19-4. 응답 스키마, API, CLI, DI**
+
+src/evaluation/schema/response.py에 EmbeddingQualityResponse 추가.
+API: GET /api/v1/notebooks/{notebook_id}/evaluation/embedding-quality 엔드포인트 추가.
+CLI: ntlm evaluation embedding-quality <notebook_id> 커맨드 추가.
+DI: analyze_embedding_quality_handler 프로바이더 추가.
+
+DB 저장 불필요 (일회성 분석, 기존 임베딩으로 계산).
+
+테스트: tests/evaluation/domain/test_metric_embedding.py, tests/evaluation/handler/test_embedding_quality_handler.py
+
+---
+
+### Phase 7: Citation & 할루시네이션 평가 (B1, B2)
+
+#### Feature 20: Citation 정확도 평가 (B1)
+
+RAGAgent가 [1], [2] 인용을 생성하고 Citation 객체(citation_index, chunk_id, snippet)를 반환하지만, _evaluate_single_rag()에서 answer_result.citations를 완전히 무시. 인용 정확도는 사용자 신뢰의 핵심.
+
+**20-1. CitationMetrics 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class CitationMetrics(pydantic.BaseModel):
+    """Citation accuracy metrics for a single test case."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    citation_precision: float   # 올바른 인용 / 총 인용 수
+    citation_recall: float      # 인용된 관련 청크 / 총 관련 청크
+    phantom_citation_count: int # 검색 결과에 없는 소스 참조 수
+    total_citations: int        # 답변 내 총 인용 수
+```
+
+**20-2. Citation 구조적 검증 함수 (LLM 불필요)**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def citation_precision(
+    cited_chunk_ids: list[str],
+    relevant_chunk_ids: set[str],
+) -> float:
+    """Fraction of cited chunks that are relevant (in ground truth)."""
+
+def citation_recall(
+    cited_chunk_ids: list[str],
+    relevant_chunk_ids: set[str],
+) -> float:
+    """Fraction of relevant chunks that are cited."""
+
+def phantom_citation_count(
+    citation_indices: list[int],
+    retrieved_chunk_count: int,
+) -> int:
+    """Count of citation indices that exceed retrieved chunk count.
+    E.g., [1] references chunk 1, but only 3 chunks were retrieved.
+    Phantom = any index > retrieved_chunk_count.
+    """
+```
+
+**20-3. Citation 의미적 검증 (LLM Judge)**
+
+src/evaluation/adapter/judge.py의 LLMJudge에 메서드 추가:
+
+```python
+async def score_citation_support(
+    self,
+    claim_with_citation: str,
+    cited_chunk_content: str,
+) -> float:
+    """Score whether the cited chunk supports the claim (0.0-1.0).
+    Uses dedicated prompt to assess if the source material
+    genuinely backs the claim made in the answer.
+    """
+```
+
+새 프롬프트 상수 추가:
+- CITATION_SUPPORT_SYSTEM_PROMPT: "You evaluate whether a source citation supports the associated claim..."
+- CITATION_SUPPORT_USER_TEMPLATE: claim + cited_chunk_content → JSON {score, reasoning}
+
+새 PydanticAI Agent: self._citation_agent 추가 (기존 패턴 동일).
+
+**20-4. TestCaseResult에 citation 메트릭 필드 추가**
+
+src/evaluation/domain/model.py의 TestCaseResult에 필드 추가:
+- citation_precision: float | None = None
+- citation_recall: float | None = None
+- phantom_citation_count: int | None = None
+- citation_support_score: float | None = None  # 의미적 검증 평균 점수
+
+TestCaseResult.create() 시그니처 확장: citation_metrics: CitationMetrics | None = None 파라미터 추가.
+
+**20-5. DB 마이그레이션**
+
+Alembic 마이그레이션:
+- evaluation_test_case_results에 nullable Float/Int 컬럼 추가:
+  - citation_precision (Float, nullable)
+  - citation_recall (Float, nullable)
+  - phantom_citation_count (Integer, nullable)
+  - citation_support_score (Float, nullable)
+
+ORM 스키마, Mapper 업데이트.
+
+**20-6. _evaluate_single_rag() 수정**
+
+src/evaluation/handler/handlers.py의 RunEvaluationHandler._evaluate_single_rag():
+- answer_result = await self._rag_agent.answer(...) 후 answer_result.citations 활용
+- citations에서 chunk_id 추출 → cited_chunk_ids
+- 구조적 검증: citation_precision(), citation_recall(), phantom_citation_count()
+- 의미적 검증 (선택적): 각 citation에 대해 score_citation_support() 호출
+- CitationMetrics 생성 → TestCaseResult.create()에 전달
+
+**20-7. 집계 메트릭**
+
+src/evaluation/domain/model.py의 GenerationMetrics에 필드 추가:
+- mean_citation_precision: float | None = None
+- mean_citation_recall: float | None = None
+- mean_phantom_citation_count: float | None = None
+
+EvaluationRun에도 동일 필드 추가.
+
+src/evaluation/domain/metric.py에 aggregate_citation_metrics 함수 추가:
+```python
+def aggregate_citation_metrics(
+    citation_precisions: list[float],
+    citation_recalls: list[float],
+    phantom_counts: list[int],
+) -> tuple[float, float, float]:
+    """Calculate mean citation precision, recall, phantom count."""
+```
+
+DB: evaluation_runs에 mean_citation_precision, mean_citation_recall, mean_phantom_citation_count 컬럼 추가.
+
+**20-8. 응답 스키마, CLI 업데이트**
+
+TestCaseResultResponse에 citation_precision, citation_recall, phantom_citation_count, citation_support_score 추가.
+RunDetail에 mean_citation_precision, mean_citation_recall 추가.
+RunComparisonMetrics에 citation 메트릭 추가.
+CLI 결과 표시에 Citation 섹션 추가.
+
+테스트: tests/evaluation/domain/test_metric_citation.py, tests/evaluation/adapter/test_judge_citation.py, tests/evaluation/handler/test_evaluate_citation.py
+
+---
+
+#### Feature 21: 구조적 할루시네이션 분석 (B2)
+
+faithfulness를 단일 float에서 claim-level 분석으로 확장. 문제의 근본 원인(contradiction vs fabrication) 특정 가능.
+
+**21-1. ClaimVerdict, ClaimAnalysis, HallucinationAnalysis 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+
+```python
+class ClaimVerdict(enum.StrEnum):
+    """Verdict for a single claim against context."""
+    SUPPORTED = "supported"
+    PARTIALLY_SUPPORTED = "partially_supported"
+    CONTRADICTED = "contradicted"
+    FABRICATED = "fabricated"
+    UNVERIFIABLE = "unverifiable"
+
+class ClaimAnalysis(pydantic.BaseModel):
+    """Analysis of a single claim."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    claim_text: str
+    verdict: ClaimVerdict
+    supporting_chunk_indices: tuple[int, ...]  # 1-indexed
+    reasoning: str
+
+class HallucinationAnalysis(pydantic.BaseModel):
+    """Structured hallucination analysis for an answer."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    claims: tuple[ClaimAnalysis, ...]
+    total_claims: int
+    supported_count: int
+    partially_supported_count: int
+    contradicted_count: int
+    fabricated_count: int
+    unverifiable_count: int
+    hallucination_rate: float  # (contradicted + fabricated) / total
+    faithfulness_score: float  # derived: (supported + 0.5*partial) / total
+```
+
+**21-2. LLMJudge에 analyze_hallucinations() 메서드 추가**
+
+src/evaluation/adapter/judge.py의 LLMJudge에 추가:
+
+```python
+async def analyze_hallucinations(
+    self,
+    question: str,
+    answer: str,
+    context_chunks: list[Chunk],
+) -> HallucinationAnalysis:
+    """Decompose answer into claims and verify each against context.
+    Returns structured analysis with per-claim verdicts.
+    """
+```
+
+새 프롬프트 상수:
+- HALLUCINATION_SYSTEM_PROMPT: "You decompose answers into atomic claims and verify each against provided context..."
+- HALLUCINATION_USER_TEMPLATE: question + answer + context → JSON {claims: [{claim_text, verdict, supporting_chunks, reasoning}, ...]}
+
+새 PydanticAI Agent: self._hallucination_agent.
+
+기존 score_faithfulness()와의 관계: 두 메서드 공존. score_faithfulness는 빠른 단일 점수용, analyze_hallucinations는 상세 분석용. _evaluate_single_rag에서 FULL_RAG 타입일 때 analyze_hallucinations를 호출하고, faithfulness_score를 여기서 도출.
+
+**21-3. TestCaseResult에 할루시네이션 분석 필드 추가**
+
+src/evaluation/domain/model.py의 TestCaseResult에 필드 추가:
+- hallucination_rate: float | None = None
+- contradiction_count: int | None = None
+- fabrication_count: int | None = None
+- total_claims: int | None = None
+- claim_analyses_json: str | None = None  # JSON 직렬화된 ClaimAnalysis 목록 (DB 저장용)
+
+DB: evaluation_test_case_results에 컬럼 추가:
+- hallucination_rate (Float, nullable)
+- contradiction_count (Integer, nullable)
+- fabrication_count (Integer, nullable)
+- total_claims (Integer, nullable)
+- claim_analyses_json (Text, nullable)
+
+**21-4. 집계 메트릭**
+
+GenerationMetrics / EvaluationRun에 추가:
+- mean_hallucination_rate: float | None = None
+- total_contradictions: int | None = None
+- total_fabrications: int | None = None
+
+DB: evaluation_runs에 mean_hallucination_rate, total_contradictions, total_fabrications 컬럼 추가.
+
+**21-5. _evaluate_single_rag() 수정**
+
+기존 score_faithfulness() 호출을 analyze_hallucinations()로 교체 (또는 병렬 호출):
+- hallucination_analysis = await self._llm_judge.analyze_hallucinations(...)
+- faithfulness = hallucination_analysis.faithfulness_score (기존 faithfulness 필드와 호환)
+- 추가 메트릭: hallucination_rate, contradiction_count, fabrication_count, total_claims 저장
+
+**21-6. 응답 스키마 업데이트**
+
+TestCaseResultResponse에 hallucination_rate, contradiction_count, fabrication_count, total_claims 추가.
+새 ClaimAnalysisResponse 모델 (claim_text, verdict, supporting_chunk_indices, reasoning).
+RunDetail에 mean_hallucination_rate 추가.
+CLI에 할루시네이션 분석 섹션 추가.
+
+테스트: tests/evaluation/adapter/test_judge_hallucination.py, tests/evaluation/domain/test_hallucination_model.py
+
+---
+
+### Phase 8: 생성 품질 심화 (B3, B4)
+
+#### Feature 22: 답변 완전성 평가 (B3)
+
+검색된 컨텍스트의 관련 정보를 답변이 얼마나 활용했는지 측정.
+
+**22-1. LLMJudge에 score_answer_completeness() 추가**
+
+src/evaluation/adapter/judge.py의 LLMJudge에 추가:
+
+```python
+async def score_answer_completeness(
+    self,
+    question: str,
+    answer: str,
+    context_chunks: list[Chunk],
+) -> float:
+    """Score how completely the answer uses relevant information from context (0.0-1.0)."""
+```
+
+새 프롬프트 상수:
+- COMPLETENESS_SYSTEM_PROMPT: "You evaluate whether the answer comprehensively uses all relevant information available in the context..."
+- COMPLETENESS_USER_TEMPLATE: question + answer + context → JSON {score, reasoning}
+
+새 PydanticAI Agent: self._completeness_agent.
+
+**22-2. TestCaseResult에 answer_completeness 필드 추가**
+
+src/evaluation/domain/model.py의 TestCaseResult에:
+- answer_completeness: float | None = None
+
+DB: evaluation_test_case_results에 answer_completeness (Float, nullable) 컬럼 추가.
+
+**22-3. 집계 메트릭**
+
+GenerationMetrics에 mean_answer_completeness: float | None = None 추가.
+EvaluationRun에 mean_answer_completeness: float | None = None 추가.
+DB: evaluation_runs에 mean_answer_completeness 컬럼 추가.
+
+**22-4. _evaluate_single_rag() 수정**
+
+faithfulness, relevancy와 함께 completeness도 호출:
+- completeness = await self._llm_judge.score_answer_completeness(question, answer, context_chunks)
+- GenerationCaseMetrics에 answer_completeness 추가
+
+**22-5. ORM, Mapper, 응답 스키마, CLI 업데이트**
+
+동일 패턴으로 전파. CLI 결과에 Answer Completeness 표시.
+
+테스트: tests/evaluation/adapter/test_judge_completeness.py
+
+---
+
+#### Feature 23: 답변 일관성 검사 (B4)
+
+같은 질문+컨텍스트에 대해 여러 run의 답변 간 유사도 측정. 비결정적 생성의 안정성 평가.
+
+**23-1. 답변 일관성 메트릭 함수**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def answer_consistency(
+    embeddings: list[list[float]],
+) -> float:
+    """Calculate mean pairwise cosine similarity across answer embeddings.
+    Used to measure consistency of answers across multiple runs.
+    """
+```
+
+**23-2. CompareRunsHandler 확장**
+
+src/evaluation/handler/handlers.py의 CompareRunsHandler:
+- __init__에 embedding_provider: EmbeddingProviderPort 의존성 추가
+- FULL_RAG run 비교 시 같은 test case의 generated_answer 목록 수집
+- 각 답변을 임베딩 → pairwise cosine 유사도 계산
+- per-test-case consistency 점수 + mean consistency 집계
+
+**23-3. 응답 스키마 업데이트**
+
+TestCaseComparison에 answer_consistency: float | None = None 추가.
+RunComparisonResponse에 mean_answer_consistency: float | None = None 추가.
+
+**23-4. DI 업데이트**
+
+CompareRunsHandler에 embedding_provider 주입. 이를 위해 EvaluationHandlerContainer에 embedding_provider 의존성 추가 (chunk_adapter에서 제공).
+
+CLI: 비교 결과에 Answer Consistency 표시.
+
+테스트: tests/evaluation/domain/test_metric_consistency.py, tests/evaluation/handler/test_compare_consistency.py
+
+---
+
+### Phase 9: End-to-End 시스템 평가 (C1, C2, C3)
+
+#### Feature 24: 오류 전파 분석 (C1)
+
+검색 품질과 생성 품질 간 상관관계 분석. 기존 FULL_RAG run 데이터만으로 계산.
+
+**24-1. 상관관계 분석 함수**
+
+src/evaluation/domain/metric.py에 추가:
+
+```python
+def pearson_correlation(
+    xs: list[float],
+    ys: list[float],
+) -> float | None:
+    """Calculate Pearson correlation coefficient. Returns None if < 3 data points."""
+
+def bucket_generation_quality(
+    results: list[tuple[float, float, float]],
+) -> dict[str, tuple[float, float]]:
+    """Bucket results by retrieval quality and compute mean generation metrics.
+    Input: list of (recall, faithfulness, relevancy) per test case.
+    Output: dict mapping bucket ("perfect"/"partial"/"missed") to (mean_faithfulness, mean_relevancy).
+    Buckets: recall=1.0 → perfect, 0<recall<1.0 → partial, recall=0.0 → missed.
+    """
+```
+
+**24-2. ErrorPropagationAnalysis 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class RetrievalBucketMetrics(pydantic.BaseModel):
+    """Generation quality metrics for a retrieval quality bucket."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    bucket: str  # "perfect", "partial", "missed"
+    test_case_count: int
+    mean_faithfulness: float
+    mean_relevancy: float
+
+class ErrorPropagationAnalysis(pydantic.BaseModel):
+    """Analysis of error propagation from retrieval to generation."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    recall_faithfulness_correlation: float | None
+    recall_relevancy_correlation: float | None
+    bucket_metrics: tuple[RetrievalBucketMetrics, ...]
+```
+
+**24-3. GetRunHandler 확장**
+
+GetRunHandler.handle()에서 FULL_RAG run인 경우:
+1. 각 test_case_result에서 (recall, faithfulness, relevancy) 추출
+2. pearson_correlation(), bucket_generation_quality() 호출
+3. ErrorPropagationAnalysis 생성
+4. RunDetail에 포함
+
+src/evaluation/schema/response.py에 추가:
+- RetrievalBucketMetricsResponse, ErrorPropagationResponse
+- RunDetail에 error_propagation: ErrorPropagationResponse | None = None 추가
+
+DB 저장 불필요 (런타임 계산).
+
+CLI: FULL_RAG 결과 표시 시 오류 전파 분석 섹션 추가.
+
+테스트: tests/evaluation/domain/test_metric_correlation.py, tests/evaluation/handler/test_get_run_error_propagation.py
+
+---
+
+#### Feature 25: 비용-품질 트레이드오프 추적 (C2)
+
+평가 실행의 토큰 사용량과 비용 추적.
+
+**25-1. RunCostMetrics 도메인 모델**
+
+src/evaluation/domain/model.py에 추가:
+```python
+class RunCostMetrics(pydantic.BaseModel):
+    """Cost metrics for an evaluation run."""
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    total_input_tokens: int
+    total_output_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+    mean_latency_ms: float | None = None
+```
+
+**25-2. EvaluationRun에 비용 메트릭 저장**
+
+EvaluationRun에 필드 추가:
+- total_input_tokens: int | None = None
+- total_output_tokens: int | None = None
+- estimated_cost_usd: float | None = None
+
+DB: evaluation_runs에 total_input_tokens (Integer, nullable), total_output_tokens (Integer, nullable), estimated_cost_usd (Float, nullable) 추가.
+
+**25-3. RunEvaluationHandler에서 토큰 추적**
+
+PydanticAI의 result.usage()에서 input_tokens, output_tokens 추출.
+_evaluate_single_rag()에서 각 LLM 호출(faithfulness, relevancy, hallucination, completeness, citation_support)의 usage 누적.
+_evaluate_full_rag()에서 총 usage 집계.
+
+비용 추정: 모델별 가격표를 상수로 정의 (COST_PER_1K_TOKENS dict).
+```python
+TOKEN_COSTS: dict[str, tuple[float, float]] = {
+    "openai:gpt-4o-mini": (0.00015, 0.0006),  # (input_per_1k, output_per_1k)
+    "openai:gpt-4o": (0.005, 0.015),
+}
+```
+
+mark_completed() 시 비용 메트릭 포함.
+
+**25-4. 응답 스키마 업데이트**
+
+RunDetail에 cost_metrics: RunCostMetricsResponse | None = None 추가.
+RunComparisonMetrics에 estimated_cost_usd: float | None = None 추가.
+CLI: 결과 표시에 Cost 섹션 추가.
+
+테스트: tests/evaluation/handler/test_cost_tracking.py
+
+---
+
+#### Feature 26: Multi-Model 생성 평가 (C3)
+
+동일 검색 결과로 다른 생성 모델을 비교.
+
+**26-1. RunEvaluation 커맨드에 generation_model 옵션 추가**
+
+src/evaluation/schema/command.py의 RunEvaluation에 필드 추가:
+- generation_model: str | None = pydantic.Field(default=None, description="생성 모델 오버라이드 (예: 'openai:gpt-4o')")
+
+**26-2. EvaluationRun에 모델 정보 저장**
+
+src/evaluation/domain/model.py의 EvaluationRun에 필드 추가:
+- generation_model: str | None = None
+
+DB: evaluation_runs에 generation_model (String(100), nullable) 컬럼 추가.
+
+**26-3. RunEvaluationHandler에서 모델 오버라이드 지원**
+
+_evaluate_full_rag()에서 cmd.generation_model이 지정되면:
+1. 임시 RAGAgent 인스턴스 생성 (지정 모델 사용)
+2. 해당 agent로 답변 생성
+3. 평가 완료 후 임시 인스턴스 폐기
+
+RAGAgent 생성에 필요한 의존성: 기존 DI에서 RAGAgent 팩토리를 사용하거나, model 파라미터를 받는 방식으로 처리.
+
+**26-4. 비교 시 모델 정보 포함**
+
+CompareRunsHandler._build_aggregate_metrics()에서 generation_model 포함.
+RunComparisonMetrics에 generation_model: str | None = None 추가.
+CLI 비교 결과에 모델명 표시.
+
+**26-5. API, CLI 업데이트**
+
+API: run evaluation 엔드포인트에서 generation_model 전달 (이미 RunEvaluation 커맨드에 포함).
+CLI: --generation-model 옵션 추가.
+
+테스트: tests/evaluation/handler/test_multi_model.py
+
+---
+
+## DB Migration Summary
+
+각 Phase별 필요한 마이그레이션 정리:
+
+### Phase 4 (Feature 14)
+- evaluation_datasets: expand_ground_truth (Boolean, default=False)
+
+### Phase 5 (Feature 16)
+- evaluation_runs: ndcg_at_k (Float, nullable), map_at_k (Float, nullable)
+- evaluation_test_case_results: ndcg (Float, default=0.0), map_score (Float, default=0.0)
+
+### Phase 7 (Feature 20)
+- evaluation_test_case_results: citation_precision (Float, nullable), citation_recall (Float, nullable), phantom_citation_count (Integer, nullable), citation_support_score (Float, nullable)
+- evaluation_runs: mean_citation_precision (Float, nullable), mean_citation_recall (Float, nullable), mean_phantom_citation_count (Float, nullable)
+
+### Phase 7 (Feature 21)
+- evaluation_test_case_results: hallucination_rate (Float, nullable), contradiction_count (Integer, nullable), fabrication_count (Integer, nullable), total_claims (Integer, nullable), claim_analyses_json (Text, nullable)
+- evaluation_runs: mean_hallucination_rate (Float, nullable), total_contradictions (Integer, nullable), total_fabrications (Integer, nullable)
+
+### Phase 8 (Feature 22)
+- evaluation_test_case_results: answer_completeness (Float, nullable)
+- evaluation_runs: mean_answer_completeness (Float, nullable)
+
+### Phase 9 (Feature 25)
+- evaluation_runs: total_input_tokens (Integer, nullable), total_output_tokens (Integer, nullable), estimated_cost_usd (Float, nullable)
+
+### Phase 9 (Feature 26)
+- evaluation_runs: generation_model (String(100), nullable)
+
+권장: Phase별로 마이그레이션을 묶어서 생성하되, 각 Phase를 독립적으로 배포 가능하도록 함. 모든 새 컬럼은 nullable로 추가하여 하위 호환성 보장.
+
+## New Files Summary
+
+### Phase 4
+- src/evaluation/adapter/ground_truth.py (GroundTruthExpander)
+- src/evaluation/adapter/multi_hop_generator.py (MultiHopTestGenerator)
+- tests/evaluation/adapter/test_ground_truth.py
+- tests/evaluation/adapter/test_multi_hop_generator.py
+- tests/evaluation/domain/test_metric_complete_context.py
+- tests/evaluation/handler/test_generate_dataset_expand.py
+
+### Phase 5
+- tests/evaluation/domain/test_metric_ndcg_map.py
+- tests/evaluation/domain/test_metric_score_distribution.py
+- tests/evaluation/handler/test_get_run_score_distribution.py
+
+### Phase 6
+- src/evaluation/adapter/chunk_quality.py (ChunkQualityEvaluator)
+- tests/evaluation/adapter/test_chunk_quality.py
+- tests/evaluation/handler/test_chunk_quality_handler.py
+- tests/evaluation/domain/test_metric_embedding.py
+- tests/evaluation/handler/test_embedding_quality_handler.py
+
+### Phase 7
+- tests/evaluation/domain/test_metric_citation.py
+- tests/evaluation/adapter/test_judge_citation.py
+- tests/evaluation/adapter/test_judge_hallucination.py
+- tests/evaluation/handler/test_evaluate_citation.py
+- tests/evaluation/domain/test_hallucination_model.py
+
+### Phase 8
+- tests/evaluation/adapter/test_judge_completeness.py
+- tests/evaluation/domain/test_metric_consistency.py
+- tests/evaluation/handler/test_compare_consistency.py
+
+### Phase 9
+- tests/evaluation/domain/test_metric_correlation.py
+- tests/evaluation/handler/test_get_run_error_propagation.py
+- tests/evaluation/handler/test_cost_tracking.py
+- tests/evaluation/handler/test_multi_model.py
+
+## Implementation Priority
+
+| Priority | Feature | Phase | Impact | Effort |
+|----------|---------|-------|--------|--------|
+| 1 | F14: Ground Truth 확장 | 4 | HIGH | Low-Med |
+| 2 | F20: Citation 정확도 | 7 | HIGH | Med |
+| 3 | F16: NDCG & MAP | 5 | Med | Low |
+| 4 | F21: 구조적 할루시네이션 분석 | 7 | HIGH | Med |
+| 5 | F24: 오류 전파 분석 | 9 | Med | Low |
+| 6 | F17: Score 분포 분석 | 5 | Med | Low |
+| 7 | F19: 임베딩 공간 분석 | 6 | High | Med |
+| 8 | F15: Multi-Hop 평가 | 4 | HIGH | Med-High |
+| 9 | F18: 청킹 품질 평가 | 6 | Med | Med |
+| 10 | F25: 비용-품질 추적 | 9 | Med | Low |
+| 11 | F22: 답변 완전성 | 8 | Med | Low |
+| 12 | F26: Multi-Model 평가 | 9 | Med | Med |
+| 13 | F23: 답변 일관성 | 8 | Med | Low-Med |
