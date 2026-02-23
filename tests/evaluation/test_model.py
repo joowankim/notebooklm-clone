@@ -57,8 +57,8 @@ class TestQuestionDifficulty:
 
         assert issubclass(model.QuestionDifficulty, enum.StrEnum)
 
-    def test_has_exactly_four_members(self) -> None:
-        assert len(model.QuestionDifficulty) == 4
+    def test_has_exactly_five_members(self) -> None:
+        assert len(model.QuestionDifficulty) == 5
 
 
 class TestTestCase:

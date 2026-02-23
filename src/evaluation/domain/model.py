@@ -51,6 +51,7 @@ class QuestionDifficulty(enum.StrEnum):
     ANALYTICAL = "analytical"
     INFERENTIAL = "inferential"
     PARAPHRASED = "paraphrased"
+    MULTI_HOP = "multi_hop"
 
 
 class EvaluationType(enum.StrEnum):
@@ -58,6 +59,136 @@ class EvaluationType(enum.StrEnum):
 
     RETRIEVAL_ONLY = "retrieval_only"
     FULL_RAG = "full_rag"
+
+
+class ClaimVerdict(enum.StrEnum):
+    """Verdict for a single claim in hallucination analysis."""
+
+    SUPPORTED = "supported"
+    PARTIALLY_SUPPORTED = "partially_supported"
+    CONTRADICTED = "contradicted"
+    FABRICATED = "fabricated"
+    UNVERIFIABLE = "unverifiable"
+
+
+class CitationMetrics(pydantic.BaseModel):
+    """Citation quality metrics for a generated answer."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    citation_precision: float
+    citation_recall: float
+    phantom_citation_count: int
+    total_citations: int
+
+
+class ClaimAnalysis(pydantic.BaseModel):
+    """Analysis of a single claim against source chunks."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    claim_text: str
+    verdict: ClaimVerdict
+    supporting_chunk_indices: tuple[int, ...]
+    reasoning: str
+
+
+class HallucinationAnalysis(pydantic.BaseModel):
+    """Aggregated hallucination analysis for a generated answer."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    claims: tuple[ClaimAnalysis, ...]
+    total_claims: int
+    supported_count: int
+    partially_supported_count: int
+    contradicted_count: int
+    fabricated_count: int
+    unverifiable_count: int
+    hallucination_rate: float
+    faithfulness_score: float
+
+
+class ScoreDistributionMetrics(pydantic.BaseModel):
+    """Score distribution metrics for retrieval results."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    mean_score_gap: float | None
+    high_confidence_rate: float
+    mean_relevant_score: float
+    mean_irrelevant_score: float
+
+
+class ChunkQualityMetrics(pydantic.BaseModel):
+    """Quality metrics for a single chunk."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    chunk_id: str
+    boundary_coherence: float
+    self_containment: float
+    information_density: float
+
+
+class ChunkQualityReport(pydantic.BaseModel):
+    """Quality report for all chunks in a notebook."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    notebook_id: str
+    total_chunks_analyzed: int
+    mean_boundary_coherence: float
+    mean_self_containment: float
+    mean_information_density: float
+    low_quality_chunk_ids: tuple[str, ...]
+    created_at: datetime.datetime
+
+
+class EmbeddingQualityMetrics(pydantic.BaseModel):
+    """Quality metrics for embedding space analysis."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    intra_document_similarity: float
+    inter_document_similarity: float
+    separation_ratio: float
+    adjacent_chunk_similarity: float
+    total_documents: int
+    total_chunks: int
+
+
+class RetrievalBucketMetrics(pydantic.BaseModel):
+    """Metrics for a retrieval quality bucket."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    bucket: str
+    test_case_count: int
+    mean_faithfulness: float
+    mean_relevancy: float
+
+
+class ErrorPropagationAnalysis(pydantic.BaseModel):
+    """Analysis of error propagation from retrieval to generation."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    recall_faithfulness_correlation: float | None
+    recall_relevancy_correlation: float | None
+    bucket_metrics: tuple[RetrievalBucketMetrics, ...]
+
+
+class RunCostMetrics(pydantic.BaseModel):
+    """Cost and latency metrics for an evaluation run."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    total_input_tokens: int
+    total_output_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+    mean_latency_ms: float | None = None
 
 
 class RetrievalMetrics(pydantic.BaseModel):
@@ -70,6 +201,8 @@ class RetrievalMetrics(pydantic.BaseModel):
     hit_rate_at_k: float
     mrr: float
     k: int
+    ndcg_at_k: float = 0.0
+    map_at_k: float = 0.0
 
 
 class TestCase(pydantic.BaseModel):
@@ -112,6 +245,8 @@ class CaseMetrics(pydantic.BaseModel):
     recall: float
     hit: bool
     reciprocal_rank: float
+    ndcg: float = 0.0
+    map_score: float = 0.0
 
 
 class GenerationCaseMetrics(pydantic.BaseModel):
@@ -121,6 +256,7 @@ class GenerationCaseMetrics(pydantic.BaseModel):
 
     faithfulness: float
     answer_relevancy: float
+    answer_completeness: float | None = None
 
 
 class GenerationMetrics(pydantic.BaseModel):
@@ -130,6 +266,13 @@ class GenerationMetrics(pydantic.BaseModel):
 
     mean_faithfulness: float
     mean_answer_relevancy: float
+    mean_citation_precision: float | None = None
+    mean_citation_recall: float | None = None
+    mean_phantom_citation_count: float | None = None
+    mean_hallucination_rate: float | None = None
+    total_contradictions: int | None = None
+    total_fabrications: int | None = None
+    mean_answer_completeness: float | None = None
 
 
 class TestCaseResult(pydantic.BaseModel):
@@ -145,9 +288,21 @@ class TestCaseResult(pydantic.BaseModel):
     recall: float
     hit: bool
     reciprocal_rank: float
+    ndcg: float = 0.0
+    map_score: float = 0.0
     generated_answer: str | None = None
     faithfulness: float | None = None
     answer_relevancy: float | None = None
+    citation_precision: float | None = None
+    citation_recall: float | None = None
+    phantom_citation_count: int | None = None
+    citation_support_score: float | None = None
+    hallucination_rate: float | None = None
+    contradiction_count: int | None = None
+    fabrication_count: int | None = None
+    total_claims: int | None = None
+    claim_analyses_json: str | None = None
+    answer_completeness: float | None = None
 
     @classmethod
     def create(
@@ -158,6 +313,13 @@ class TestCaseResult(pydantic.BaseModel):
         metrics: CaseMetrics,
         generation_metrics: GenerationCaseMetrics | None = None,
         generated_answer: str | None = None,
+        citation_metrics: CitationMetrics | None = None,
+        hallucination_rate: float | None = None,
+        contradiction_count: int | None = None,
+        fabrication_count: int | None = None,
+        total_claims: int | None = None,
+        claim_analyses_json: str | None = None,
+        answer_completeness: float | None = None,
     ) -> Self:
         """Factory method to create a test case result."""
         return cls(
@@ -169,9 +331,20 @@ class TestCaseResult(pydantic.BaseModel):
             recall=metrics.recall,
             hit=metrics.hit,
             reciprocal_rank=metrics.reciprocal_rank,
+            ndcg=metrics.ndcg,
+            map_score=metrics.map_score,
             generated_answer=generated_answer,
             faithfulness=generation_metrics.faithfulness if generation_metrics else None,
             answer_relevancy=generation_metrics.answer_relevancy if generation_metrics else None,
+            citation_precision=citation_metrics.citation_precision if citation_metrics else None,
+            citation_recall=citation_metrics.citation_recall if citation_metrics else None,
+            phantom_citation_count=citation_metrics.phantom_citation_count if citation_metrics else None,
+            hallucination_rate=hallucination_rate,
+            contradiction_count=contradiction_count,
+            fabrication_count=fabrication_count,
+            total_claims=total_claims,
+            claim_analyses_json=claim_analyses_json,
+            answer_completeness=answer_completeness,
         )
 
 
@@ -186,6 +359,7 @@ class EvaluationDataset(pydantic.BaseModel):
     status: DatasetStatus
     questions_per_chunk: int
     max_chunks_sample: int
+    expand_ground_truth: bool = False
     error_message: str | None = None
     test_cases: tuple[TestCase, ...] = ()
     created_at: datetime.datetime
@@ -268,8 +442,21 @@ class EvaluationRun(pydantic.BaseModel):
     recall_at_k: float | None = None
     hit_rate_at_k: float | None = None
     mrr: float | None = None
+    ndcg_at_k: float | None = None
+    map_at_k: float | None = None
     mean_faithfulness: float | None = None
     mean_answer_relevancy: float | None = None
+    mean_citation_precision: float | None = None
+    mean_citation_recall: float | None = None
+    mean_phantom_citation_count: float | None = None
+    mean_hallucination_rate: float | None = None
+    total_contradictions: int | None = None
+    total_fabrications: int | None = None
+    mean_answer_completeness: float | None = None
+    total_input_tokens: int | None = None
+    total_output_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    generation_model: str | None = None
     error_message: str | None = None
     results: tuple[TestCaseResult, ...] = ()
     created_at: datetime.datetime
@@ -312,6 +499,10 @@ class EvaluationRun(pydantic.BaseModel):
         metrics: RetrievalMetrics,
         results: tuple[TestCaseResult, ...],
         generation_metrics: GenerationMetrics | None = None,
+        generation_model: str | None = None,
+        total_input_tokens: int | None = None,
+        total_output_tokens: int | None = None,
+        estimated_cost_usd: float | None = None,
     ) -> Self:
         """Mark run as completed with metrics."""
         if self.status != RunStatus.RUNNING:
@@ -324,12 +515,29 @@ class EvaluationRun(pydantic.BaseModel):
             "recall_at_k": metrics.recall_at_k,
             "hit_rate_at_k": metrics.hit_rate_at_k,
             "mrr": metrics.mrr,
+            "ndcg_at_k": metrics.ndcg_at_k,
+            "map_at_k": metrics.map_at_k,
             "results": results,
             "updated_at": common_types.utc_now(),
         }
         if generation_metrics is not None:
             update["mean_faithfulness"] = generation_metrics.mean_faithfulness
             update["mean_answer_relevancy"] = generation_metrics.mean_answer_relevancy
+            update["mean_citation_precision"] = generation_metrics.mean_citation_precision
+            update["mean_citation_recall"] = generation_metrics.mean_citation_recall
+            update["mean_phantom_citation_count"] = generation_metrics.mean_phantom_citation_count
+            update["mean_hallucination_rate"] = generation_metrics.mean_hallucination_rate
+            update["total_contradictions"] = generation_metrics.total_contradictions
+            update["total_fabrications"] = generation_metrics.total_fabrications
+            update["mean_answer_completeness"] = generation_metrics.mean_answer_completeness
+        if generation_model is not None:
+            update["generation_model"] = generation_model
+        if total_input_tokens is not None:
+            update["total_input_tokens"] = total_input_tokens
+        if total_output_tokens is not None:
+            update["total_output_tokens"] = total_output_tokens
+        if estimated_cost_usd is not None:
+            update["estimated_cost_usd"] = estimated_cost_usd
         return self.model_copy(update=update)
 
     def mark_failed(self, error_message: str) -> Self:
