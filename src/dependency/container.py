@@ -59,6 +59,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         document_adapter=document.adapter,
         chunk_adapter=chunk.adapter,
         query_service=query.service,
+        query_adapter=query.adapter,
     )
 
     crawl = providers.Container(

@@ -217,3 +217,57 @@ class TestAggregateMetrics:
         assert mean_r == 0.8
         assert hit_rate == 1.0
         assert mrr == 0.5
+
+
+class TestAggregateGenerationMetrics:
+    """Tests for aggregate_generation_metrics function."""
+
+    def test_aggregate_normal_scores(self) -> None:
+        # Arrange
+        faithfulness_scores = [0.8, 0.6, 1.0]
+        relevancy_scores = [0.9, 0.7, 0.5]
+
+        # Act
+        mean_f, mean_r = metric_module.aggregate_generation_metrics(
+            faithfulness_scores, relevancy_scores
+        )
+
+        # Assert
+        assert abs(mean_f - 0.8) < 1e-9
+        assert abs(mean_r - 0.7) < 1e-9
+
+    def test_empty_scores_returns_zeros(self) -> None:
+        # Act
+        mean_f, mean_r = metric_module.aggregate_generation_metrics([], [])
+
+        # Assert
+        assert mean_f == 0.0
+        assert mean_r == 0.0
+
+    def test_single_score(self) -> None:
+        # Act
+        mean_f, mean_r = metric_module.aggregate_generation_metrics([0.75], [0.85])
+
+        # Assert
+        assert mean_f == 0.75
+        assert mean_r == 0.85
+
+    def test_all_perfect_scores(self) -> None:
+        # Act
+        mean_f, mean_r = metric_module.aggregate_generation_metrics(
+            [1.0, 1.0], [1.0, 1.0]
+        )
+
+        # Assert
+        assert mean_f == 1.0
+        assert mean_r == 1.0
+
+    def test_all_zero_scores(self) -> None:
+        # Act
+        mean_f, mean_r = metric_module.aggregate_generation_metrics(
+            [0.0, 0.0], [0.0, 0.0]
+        )
+
+        # Assert
+        assert mean_f == 0.0
+        assert mean_r == 0.0

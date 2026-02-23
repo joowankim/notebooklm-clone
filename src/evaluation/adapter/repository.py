@@ -125,3 +125,18 @@ class RunRepository:
         result = await self._session.execute(stmt)
         records = result.scalars().all()
         return [self._mapper.to_entity(record) for record in records]
+
+    async def list_by_ids(
+        self, run_ids: list[str]
+    ) -> list[model.EvaluationRun]:
+        """Find multiple runs by their IDs."""
+        if not run_ids:
+            return []
+        stmt = (
+            sqlalchemy.select(evaluation_schema.EvaluationRunSchema)
+            .where(evaluation_schema.EvaluationRunSchema.id.in_(run_ids))
+            .order_by(evaluation_schema.EvaluationRunSchema.created_at.asc())
+        )
+        result = await self._session.execute(stmt)
+        records = result.scalars().all()
+        return [self._mapper.to_entity(record) for record in records]

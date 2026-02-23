@@ -2,6 +2,8 @@
 
 import pydantic
 
+from src.evaluation.domain import model
+
 
 class GenerateDataset(pydantic.BaseModel):
     """Command to generate an evaluation dataset."""
@@ -19,3 +21,12 @@ class RunEvaluation(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid")
 
     k: int = pydantic.Field(default=5, ge=1, le=50)
+    evaluation_type: model.EvaluationType = model.EvaluationType.RETRIEVAL_ONLY
+
+
+class CompareRuns(pydantic.BaseModel):
+    """Command to compare multiple evaluation runs."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    run_ids: list[str] = pydantic.Field(..., min_length=2, max_length=10)

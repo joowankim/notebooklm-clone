@@ -121,3 +121,25 @@ async def get_run(
 ) -> response.RunDetail:
     """Get evaluation run details."""
     return await handler.handle(run_id)
+
+
+@router.post(
+    "/evaluation/compare",
+    response_model=response.RunComparisonResponse,
+    summary="Compare evaluation runs",
+    description="Compare multiple evaluation runs from the same dataset side-by-side.",
+    responses={
+        http.HTTPStatus.OK: {"description": "Comparison result"},
+        http.HTTPStatus.NOT_FOUND: {"description": "Run or dataset not found"},
+        http.HTTPStatus.BAD_REQUEST: {"description": "Runs cannot be compared"},
+    },
+)
+@inject
+async def compare_runs(
+    cmd: command.CompareRuns,
+    handler: handlers.CompareRunsHandler = fastapi.Depends(
+        Provide[container_module.ApplicationContainer.evaluation.handler.compare_runs_handler]
+    ),
+) -> response.RunComparisonResponse:
+    """Compare multiple evaluation runs."""
+    return await handler.handle(cmd)

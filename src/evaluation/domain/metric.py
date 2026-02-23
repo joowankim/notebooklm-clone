@@ -122,3 +122,25 @@ def aggregate_metrics(
     mrr = sum(reciprocal_ranks) / count
 
     return (mean_precision, mean_recall, hit_rate, mrr)
+
+
+def aggregate_generation_metrics(
+    faithfulness_scores: list[float],
+    relevancy_scores: list[float],
+) -> tuple[float, float]:
+    """Calculate aggregate generation metrics.
+
+    Args:
+        faithfulness_scores: Per-case faithfulness values.
+        relevancy_scores: Per-case answer relevancy values.
+
+    Returns:
+        Tuple of (mean_faithfulness, mean_answer_relevancy).
+    """
+    if not faithfulness_scores:
+        return (0.0, 0.0)
+
+    mean_faithfulness = sum(faithfulness_scores) / len(faithfulness_scores)
+    mean_relevancy = sum(relevancy_scores) / len(relevancy_scores)
+
+    return (mean_faithfulness, mean_relevancy)
