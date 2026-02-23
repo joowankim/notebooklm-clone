@@ -44,6 +44,22 @@ class RunStatus(enum.StrEnum):
         return self == RunStatus.PENDING
 
 
+class QuestionDifficulty(enum.StrEnum):
+    """Question difficulty classification."""
+
+    FACTUAL = "factual"
+    ANALYTICAL = "analytical"
+    INFERENTIAL = "inferential"
+    PARAPHRASED = "paraphrased"
+
+
+class EvaluationType(enum.StrEnum):
+    """Type of evaluation to run."""
+
+    RETRIEVAL_ONLY = "retrieval_only"
+    FULL_RAG = "full_rag"
+
+
 class RetrievalMetrics(pydantic.BaseModel):
     """Aggregated retrieval evaluation metrics."""
 
@@ -65,6 +81,7 @@ class TestCase(pydantic.BaseModel):
     question: str
     ground_truth_chunk_ids: tuple[str, ...]
     source_chunk_id: str
+    difficulty: QuestionDifficulty | None = None
     created_at: datetime.datetime
 
     @classmethod
@@ -73,6 +90,7 @@ class TestCase(pydantic.BaseModel):
         question: str,
         ground_truth_chunk_ids: tuple[str, ...],
         source_chunk_id: str,
+        difficulty: QuestionDifficulty | None = None,
     ) -> Self:
         """Factory method to create a new test case."""
         return cls(
@@ -80,6 +98,7 @@ class TestCase(pydantic.BaseModel):
             question=question,
             ground_truth_chunk_ids=ground_truth_chunk_ids,
             source_chunk_id=source_chunk_id,
+            difficulty=difficulty,
             created_at=common_types.utc_now(),
         )
 
@@ -95,6 +114,24 @@ class CaseMetrics(pydantic.BaseModel):
     reciprocal_rank: float
 
 
+class GenerationCaseMetrics(pydantic.BaseModel):
+    """Per-case generation quality metrics."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    faithfulness: float
+    answer_relevancy: float
+
+
+class GenerationMetrics(pydantic.BaseModel):
+    """Aggregated generation quality metrics."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    mean_faithfulness: float
+    mean_answer_relevancy: float
+
+
 class TestCaseResult(pydantic.BaseModel):
     """Result of evaluating a single test case."""
 
@@ -108,6 +145,9 @@ class TestCaseResult(pydantic.BaseModel):
     recall: float
     hit: bool
     reciprocal_rank: float
+    generated_answer: str | None = None
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
 
     @classmethod
     def create(
@@ -116,6 +156,8 @@ class TestCaseResult(pydantic.BaseModel):
         retrieved_chunk_ids: tuple[str, ...],
         retrieved_scores: tuple[float, ...],
         metrics: CaseMetrics,
+        generation_metrics: GenerationCaseMetrics | None = None,
+        generated_answer: str | None = None,
     ) -> Self:
         """Factory method to create a test case result."""
         return cls(
@@ -127,6 +169,9 @@ class TestCaseResult(pydantic.BaseModel):
             recall=metrics.recall,
             hit=metrics.hit,
             reciprocal_rank=metrics.reciprocal_rank,
+            generated_answer=generated_answer,
+            faithfulness=generation_metrics.faithfulness if generation_metrics else None,
+            answer_relevancy=generation_metrics.answer_relevancy if generation_metrics else None,
         )
 
 
@@ -218,17 +263,25 @@ class EvaluationRun(pydantic.BaseModel):
     dataset_id: str
     status: RunStatus
     k: int
+    evaluation_type: EvaluationType = EvaluationType.RETRIEVAL_ONLY
     precision_at_k: float | None = None
     recall_at_k: float | None = None
     hit_rate_at_k: float | None = None
     mrr: float | None = None
+    mean_faithfulness: float | None = None
+    mean_answer_relevancy: float | None = None
     error_message: str | None = None
     results: tuple[TestCaseResult, ...] = ()
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
     @classmethod
-    def create(cls, dataset_id: str, k: int = 5) -> Self:
+    def create(
+        cls,
+        dataset_id: str,
+        k: int = 5,
+        evaluation_type: EvaluationType = EvaluationType.RETRIEVAL_ONLY,
+    ) -> Self:
         """Factory method to create a new evaluation run."""
         now = common_types.utc_now()
         return cls(
@@ -236,6 +289,7 @@ class EvaluationRun(pydantic.BaseModel):
             dataset_id=dataset_id,
             status=RunStatus.PENDING,
             k=k,
+            evaluation_type=evaluation_type,
             created_at=now,
             updated_at=now,
         )
@@ -257,23 +311,26 @@ class EvaluationRun(pydantic.BaseModel):
         self,
         metrics: RetrievalMetrics,
         results: tuple[TestCaseResult, ...],
+        generation_metrics: GenerationMetrics | None = None,
     ) -> Self:
         """Mark run as completed with metrics."""
         if self.status != RunStatus.RUNNING:
             raise exceptions.InvalidStateError(
                 f"Cannot complete evaluation in status: {self.status}"
             )
-        return self.model_copy(
-            update={
-                "status": RunStatus.COMPLETED,
-                "precision_at_k": metrics.precision_at_k,
-                "recall_at_k": metrics.recall_at_k,
-                "hit_rate_at_k": metrics.hit_rate_at_k,
-                "mrr": metrics.mrr,
-                "results": results,
-                "updated_at": common_types.utc_now(),
-            }
-        )
+        update: dict[str, object] = {
+            "status": RunStatus.COMPLETED,
+            "precision_at_k": metrics.precision_at_k,
+            "recall_at_k": metrics.recall_at_k,
+            "hit_rate_at_k": metrics.hit_rate_at_k,
+            "mrr": metrics.mrr,
+            "results": results,
+            "updated_at": common_types.utc_now(),
+        }
+        if generation_metrics is not None:
+            update["mean_faithfulness"] = generation_metrics.mean_faithfulness
+            update["mean_answer_relevancy"] = generation_metrics.mean_answer_relevancy
+        return self.model_copy(update=update)
 
     def mark_failed(self, error_message: str) -> Self:
         """Mark run as failed."""

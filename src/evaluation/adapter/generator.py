@@ -17,9 +17,15 @@ Your task is to generate diverse, realistic questions that can be answered from 
 Rules:
 - Questions must be self-contained (do not reference "the passage", "the text", "the above", etc.)
 - Do not generate yes/no questions
-- Generate diverse question types: factual, analytical, comparative, explanatory
+- Generate diverse question types and classify each by difficulty
 - Questions should require information specifically from the passage to answer
-- Return valid JSON only"""
+- Return valid JSON only
+
+Difficulty classifications:
+- factual: Direct information recall from the passage
+- analytical: Requires analyzing or comparing information
+- inferential: Requires drawing conclusions beyond explicit text
+- paraphrased: Rewording of passage content"""
 
 USER_PROMPT_TEMPLATE = """Based on the following passage, generate exactly {count} questions that can be answered using the information in this passage.
 
@@ -27,7 +33,9 @@ Passage:
 {content}
 
 Return your response as a JSON object with this exact format:
-{{"questions": ["question 1", "question 2", ...]}}"""
+{{"questions": [{{"text": "question 1", "difficulty": "factual"}}, ...]}}
+
+Valid difficulty values: factual, analytical, inferential, paraphrased"""
 
 
 class SyntheticTestGenerator:
@@ -43,7 +51,7 @@ class SyntheticTestGenerator:
         self,
         chunk: chunk_model.Chunk,
         count: int = 2,
-    ) -> list[str]:
+    ) -> list[tuple[str, model.QuestionDifficulty | None]]:
         """Generate questions from a chunk's content.
 
         Args:
@@ -51,7 +59,7 @@ class SyntheticTestGenerator:
             count: Number of questions to generate.
 
         Returns:
-            List of generated questions.
+            List of (question_text, difficulty) tuples.
         """
         prompt = USER_PROMPT_TEMPLATE.format(
             count=count,
@@ -65,25 +73,61 @@ class SyntheticTestGenerator:
             logger.warning("Failed to generate questions for chunk %s: %s", chunk.id, exc)
             return []
 
-    def _parse_questions(self, output: str, expected_count: int) -> list[str]:
-        """Parse LLM output into a list of questions."""
-        # Try to extract JSON from the output
+    def _parse_questions(
+        self,
+        output: str,
+        expected_count: int,
+    ) -> list[tuple[str, model.QuestionDifficulty | None]]:
+        """Parse LLM output into a list of (question, difficulty) tuples."""
         try:
-            # Handle potential markdown code blocks
-            cleaned = output.strip()
-            if cleaned.startswith("```"):
-                # Remove markdown code block markers
-                lines = cleaned.split("\n")
-                cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
-
+            cleaned = self._strip_markdown_code_block(output)
             data = json.loads(cleaned)
             questions = data.get("questions", [])
             if isinstance(questions, list):
-                return [q for q in questions if isinstance(q, str) and q.strip()]
+                return self._extract_question_tuples(questions)
         except (json.JSONDecodeError, AttributeError):
             logger.warning("Failed to parse LLM output as JSON: %s", output[:200])
 
         return []
+
+    @staticmethod
+    def _strip_markdown_code_block(output: str) -> str:
+        """Remove markdown code block markers from output."""
+        cleaned = output.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
+        return cleaned
+
+    def _extract_question_tuples(
+        self,
+        questions: list[dict[str, str] | str],
+    ) -> list[tuple[str, model.QuestionDifficulty | None]]:
+        """Extract (text, difficulty) tuples from parsed question items."""
+        results: list[tuple[str, model.QuestionDifficulty | None]] = []
+        for item in questions:
+            if isinstance(item, str) and item.strip():
+                results.append((item, None))
+            elif isinstance(item, dict):
+                text = item.get("text", "")
+                if not text or not text.strip():
+                    continue
+                difficulty = self._parse_difficulty(item.get("difficulty"))
+                results.append((text, difficulty))
+        return results
+
+    def _parse_difficulty(
+        self,
+        raw_value: str | None,
+    ) -> model.QuestionDifficulty | None:
+        """Parse a difficulty string into a QuestionDifficulty enum."""
+        if raw_value is None:
+            return None
+        try:
+            return model.QuestionDifficulty(raw_value.lower())
+        except ValueError:
+            logger.warning("Unknown difficulty value: %s", raw_value)
+            return None
 
     @staticmethod
     def sample_chunks(
@@ -124,11 +168,12 @@ class SyntheticTestGenerator:
 
         for chunk in sampled:
             questions = await self.generate_questions(chunk, questions_per_chunk)
-            for question in questions:
+            for question_text, difficulty in questions:
                 test_case = model.TestCase.create(
-                    question=question,
+                    question=question_text,
                     ground_truth_chunk_ids=(chunk.id,),
                     source_chunk_id=chunk.id,
+                    difficulty=difficulty,
                 )
                 test_cases.append(test_case)
 

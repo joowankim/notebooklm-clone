@@ -15,6 +15,7 @@ class TestCaseResponse(pydantic.BaseModel):
     question: str
     ground_truth_chunk_ids: list[str]
     source_chunk_id: str
+    difficulty: str | None = None
     created_at: datetime.datetime
 
     @classmethod
@@ -25,6 +26,7 @@ class TestCaseResponse(pydantic.BaseModel):
             question=entity.question,
             ground_truth_chunk_ids=list(entity.ground_truth_chunk_ids),
             source_chunk_id=entity.source_chunk_id,
+            difficulty=entity.difficulty.value if entity.difficulty else None,
             created_at=entity.created_at,
         )
 
@@ -101,6 +103,9 @@ class TestCaseResultResponse(pydantic.BaseModel):
     recall: float
     hit: bool
     reciprocal_rank: float
+    generated_answer: str | None = None
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
 
     @classmethod
     def from_entity(cls, entity: model.TestCaseResult) -> Self:
@@ -113,6 +118,9 @@ class TestCaseResultResponse(pydantic.BaseModel):
             recall=entity.recall,
             hit=entity.hit,
             reciprocal_rank=entity.reciprocal_rank,
+            generated_answer=entity.generated_answer,
+            faithfulness=entity.faithfulness,
+            answer_relevancy=entity.answer_relevancy,
         )
 
 
@@ -126,6 +134,17 @@ class MetricsResponse(pydantic.BaseModel):
     k: int
 
 
+class DifficultyMetrics(pydantic.BaseModel):
+    """Per-difficulty aggregated metrics response."""
+
+    difficulty: str
+    test_case_count: int
+    precision_at_k: float
+    recall_at_k: float
+    hit_rate_at_k: float
+    mrr: float
+
+
 class RunDetail(pydantic.BaseModel):
     """Evaluation run detail response."""
 
@@ -133,7 +152,11 @@ class RunDetail(pydantic.BaseModel):
     dataset_id: str
     status: str
     k: int
+    evaluation_type: str = "retrieval_only"
     metrics: MetricsResponse | None
+    metrics_by_difficulty: list[DifficultyMetrics] | None = None
+    mean_faithfulness: float | None = None
+    mean_answer_relevancy: float | None = None
     error_message: str | None
     results: list[TestCaseResultResponse]
     created_at: datetime.datetime
@@ -157,12 +180,61 @@ class RunDetail(pydantic.BaseModel):
             dataset_id=entity.dataset_id,
             status=entity.status.value,
             k=entity.k,
+            evaluation_type=entity.evaluation_type.value,
             metrics=metrics,
+            mean_faithfulness=entity.mean_faithfulness,
+            mean_answer_relevancy=entity.mean_answer_relevancy,
             error_message=entity.error_message,
             results=[TestCaseResultResponse.from_entity(r) for r in entity.results],
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
+
+
+class RunComparisonMetrics(pydantic.BaseModel):
+    """Per-run aggregate metrics for comparison."""
+
+    run_id: str
+    created_at: datetime.datetime
+    evaluation_type: str
+    precision_at_k: float
+    recall_at_k: float
+    hit_rate_at_k: float
+    mrr: float
+    mean_faithfulness: float | None = None
+    mean_answer_relevancy: float | None = None
+
+
+class TestCaseComparisonEntry(pydantic.BaseModel):
+    """Per-run metrics for a single test case."""
+
+    run_id: str
+    precision: float
+    recall: float
+    hit: bool
+    reciprocal_rank: float
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
+    generated_answer: str | None = None
+
+
+class TestCaseComparison(pydantic.BaseModel):
+    """Comparison of a test case across multiple runs."""
+
+    test_case_id: str
+    question: str
+    difficulty: str | None = None
+    entries: list[TestCaseComparisonEntry]
+
+
+class RunComparisonResponse(pydantic.BaseModel):
+    """Complete run comparison response."""
+
+    dataset_id: str
+    k: int
+    run_count: int
+    aggregate_metrics: list[RunComparisonMetrics]
+    test_case_comparisons: list[TestCaseComparison]
 
 
 class DatasetId(pydantic.BaseModel):

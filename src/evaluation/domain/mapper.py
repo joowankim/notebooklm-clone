@@ -18,6 +18,7 @@ class DatasetMapper:
                 question=tc.question,
                 ground_truth_chunk_ids=tuple(json.loads(tc.ground_truth_chunk_ids)),
                 source_chunk_id=tc.source_chunk_id,
+                difficulty=model.QuestionDifficulty(tc.difficulty) if tc.difficulty else None,
                 created_at=tc.created_at,
             )
             for tc in sorted(record.test_cases, key=lambda t: t.created_at)
@@ -63,6 +64,7 @@ class DatasetMapper:
             question=test_case.question,
             ground_truth_chunk_ids=json.dumps(list(test_case.ground_truth_chunk_ids)),
             source_chunk_id=test_case.source_chunk_id,
+            difficulty=test_case.difficulty.value if test_case.difficulty else None,
             created_at=test_case.created_at,
         )
 
@@ -83,6 +85,9 @@ class RunMapper:
                 recall=r.recall,
                 hit=r.hit,
                 reciprocal_rank=r.reciprocal_rank,
+                generated_answer=r.generated_answer,
+                faithfulness=r.faithfulness,
+                answer_relevancy=r.answer_relevancy,
             )
             for r in record.results
         )
@@ -92,10 +97,13 @@ class RunMapper:
             dataset_id=record.dataset_id,
             status=model.RunStatus(record.status),
             k=record.k,
+            evaluation_type=model.EvaluationType(record.evaluation_type),
             precision_at_k=record.precision_at_k,
             recall_at_k=record.recall_at_k,
             hit_rate_at_k=record.hit_rate_at_k,
             mrr=record.mrr,
+            mean_faithfulness=record.mean_faithfulness,
+            mean_answer_relevancy=record.mean_answer_relevancy,
             error_message=record.error_message,
             results=results,
             created_at=record.created_at,
@@ -110,10 +118,13 @@ class RunMapper:
             dataset_id=entity.dataset_id,
             status=entity.status.value,
             k=entity.k,
+            evaluation_type=entity.evaluation_type.value,
             precision_at_k=entity.precision_at_k,
             recall_at_k=entity.recall_at_k,
             hit_rate_at_k=entity.hit_rate_at_k,
             mrr=entity.mrr,
+            mean_faithfulness=entity.mean_faithfulness,
+            mean_answer_relevancy=entity.mean_answer_relevancy,
             error_message=entity.error_message,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
@@ -135,4 +146,7 @@ class RunMapper:
             recall=result.recall,
             hit=result.hit,
             reciprocal_rank=result.reciprocal_rank,
+            generated_answer=result.generated_answer,
+            faithfulness=result.faithfulness,
+            answer_relevancy=result.answer_relevancy,
         )

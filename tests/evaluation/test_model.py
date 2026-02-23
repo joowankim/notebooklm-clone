@@ -37,6 +37,30 @@ class TestRunStatus:
         assert model.RunStatus.COMPLETED.is_runnable is False
 
 
+class TestQuestionDifficulty:
+    """Tests for QuestionDifficulty enum."""
+
+    def test_factual_value(self) -> None:
+        assert model.QuestionDifficulty.FACTUAL == "factual"
+
+    def test_analytical_value(self) -> None:
+        assert model.QuestionDifficulty.ANALYTICAL == "analytical"
+
+    def test_inferential_value(self) -> None:
+        assert model.QuestionDifficulty.INFERENTIAL == "inferential"
+
+    def test_paraphrased_value(self) -> None:
+        assert model.QuestionDifficulty.PARAPHRASED == "paraphrased"
+
+    def test_is_str_enum(self) -> None:
+        import enum
+
+        assert issubclass(model.QuestionDifficulty, enum.StrEnum)
+
+    def test_has_exactly_four_members(self) -> None:
+        assert len(model.QuestionDifficulty) == 4
+
+
 class TestTestCase:
     """Tests for TestCase entity."""
 
@@ -62,6 +86,65 @@ class TestTestCase:
         )
         with pytest.raises(Exception):
             test_case.question = "modified"
+
+    def test_create_without_difficulty_defaults_to_none(self) -> None:
+        test_case = model.TestCase.create(
+            question="What is AI?",
+            ground_truth_chunk_ids=("chunk1",),
+            source_chunk_id="chunk1",
+        )
+
+        assert test_case.difficulty is None
+
+    def test_create_with_factual_difficulty(self) -> None:
+        test_case = model.TestCase.create(
+            question="What is AI?",
+            ground_truth_chunk_ids=("chunk1",),
+            source_chunk_id="chunk1",
+            difficulty=model.QuestionDifficulty.FACTUAL,
+        )
+
+        assert test_case.difficulty == model.QuestionDifficulty.FACTUAL
+
+    def test_create_with_analytical_difficulty(self) -> None:
+        test_case = model.TestCase.create(
+            question="How does AI compare to ML?",
+            ground_truth_chunk_ids=("chunk1",),
+            source_chunk_id="chunk1",
+            difficulty=model.QuestionDifficulty.ANALYTICAL,
+        )
+
+        assert test_case.difficulty == model.QuestionDifficulty.ANALYTICAL
+
+    def test_create_with_inferential_difficulty(self) -> None:
+        test_case = model.TestCase.create(
+            question="What might happen if AI advances?",
+            ground_truth_chunk_ids=("chunk1",),
+            source_chunk_id="chunk1",
+            difficulty=model.QuestionDifficulty.INFERENTIAL,
+        )
+
+        assert test_case.difficulty == model.QuestionDifficulty.INFERENTIAL
+
+    def test_create_with_paraphrased_difficulty(self) -> None:
+        test_case = model.TestCase.create(
+            question="Explain artificial intelligence",
+            ground_truth_chunk_ids=("chunk1",),
+            source_chunk_id="chunk1",
+            difficulty=model.QuestionDifficulty.PARAPHRASED,
+        )
+
+        assert test_case.difficulty == model.QuestionDifficulty.PARAPHRASED
+
+    def test_immutability_with_difficulty_field(self) -> None:
+        test_case = model.TestCase.create(
+            question="test",
+            ground_truth_chunk_ids=("c1",),
+            source_chunk_id="c1",
+            difficulty=model.QuestionDifficulty.FACTUAL,
+        )
+        with pytest.raises(Exception):
+            test_case.difficulty = model.QuestionDifficulty.ANALYTICAL
 
 
 class TestTestCaseResult:
@@ -285,3 +368,215 @@ class TestEvaluationRun:
         run = model.EvaluationRun.create(dataset_id="ds1")
         with pytest.raises(Exception):
             run.k = 10
+
+    def test_create_run_with_evaluation_type(self) -> None:
+        run = model.EvaluationRun.create(
+            dataset_id="ds1",
+            evaluation_type=model.EvaluationType.FULL_RAG,
+        )
+
+        assert run.evaluation_type == model.EvaluationType.FULL_RAG
+
+    def test_create_run_default_evaluation_type_is_retrieval_only(self) -> None:
+        run = model.EvaluationRun.create(dataset_id="ds1")
+
+        assert run.evaluation_type == model.EvaluationType.RETRIEVAL_ONLY
+
+    def test_mark_completed_with_generation_metrics(self) -> None:
+        run = model.EvaluationRun.create(dataset_id="ds1", k=5)
+        running = run.mark_running()
+
+        retrieval_metrics = model.RetrievalMetrics(
+            precision_at_k=0.2,
+            recall_at_k=0.8,
+            hit_rate_at_k=0.8,
+            mrr=0.65,
+            k=5,
+        )
+        generation_metrics = model.GenerationMetrics(
+            mean_faithfulness=0.85,
+            mean_answer_relevancy=0.90,
+        )
+        case_metrics = model.CaseMetrics(
+            precision=0.2,
+            recall=0.8,
+            hit=True,
+            reciprocal_rank=1.0,
+        )
+        result = model.TestCaseResult.create(
+            test_case_id="tc1",
+            retrieved_chunk_ids=("c1",),
+            retrieved_scores=(0.9,),
+            metrics=case_metrics,
+        )
+        completed = running.mark_completed(
+            metrics=retrieval_metrics,
+            results=(result,),
+            generation_metrics=generation_metrics,
+        )
+
+        assert completed.mean_faithfulness == 0.85
+        assert completed.mean_answer_relevancy == 0.90
+
+    def test_mark_completed_without_generation_metrics_backward_compat(self) -> None:
+        run = model.EvaluationRun.create(dataset_id="ds1", k=5)
+        running = run.mark_running()
+
+        retrieval_metrics = model.RetrievalMetrics(
+            precision_at_k=0.2,
+            recall_at_k=0.8,
+            hit_rate_at_k=0.8,
+            mrr=0.65,
+            k=5,
+        )
+        case_metrics = model.CaseMetrics(
+            precision=0.2,
+            recall=0.8,
+            hit=True,
+            reciprocal_rank=1.0,
+        )
+        result = model.TestCaseResult.create(
+            test_case_id="tc1",
+            retrieved_chunk_ids=("c1",),
+            retrieved_scores=(0.9,),
+            metrics=case_metrics,
+        )
+        completed = running.mark_completed(
+            metrics=retrieval_metrics,
+            results=(result,),
+        )
+
+        assert completed.mean_faithfulness is None
+        assert completed.mean_answer_relevancy is None
+
+
+class TestEvaluationType:
+    """Tests for EvaluationType enum."""
+
+    def test_retrieval_only_value(self) -> None:
+        assert model.EvaluationType.RETRIEVAL_ONLY == "retrieval_only"
+
+    def test_full_rag_value(self) -> None:
+        assert model.EvaluationType.FULL_RAG == "full_rag"
+
+    def test_is_str_enum(self) -> None:
+        import enum
+
+        assert issubclass(model.EvaluationType, enum.StrEnum)
+
+    def test_has_exactly_two_members(self) -> None:
+        assert len(model.EvaluationType) == 2
+
+
+class TestGenerationCaseMetrics:
+    """Tests for GenerationCaseMetrics value object."""
+
+    def test_create_generation_case_metrics(self) -> None:
+        metrics = model.GenerationCaseMetrics(
+            faithfulness=0.85,
+            answer_relevancy=0.90,
+        )
+
+        assert metrics.faithfulness == 0.85
+        assert metrics.answer_relevancy == 0.90
+
+    def test_immutability(self) -> None:
+        metrics = model.GenerationCaseMetrics(
+            faithfulness=0.85,
+            answer_relevancy=0.90,
+        )
+        with pytest.raises(Exception):
+            metrics.faithfulness = 0.5
+
+    def test_extra_fields_forbidden(self) -> None:
+        with pytest.raises(Exception):
+            model.GenerationCaseMetrics(
+                faithfulness=0.85,
+                answer_relevancy=0.90,
+                extra_field=0.5,
+            )
+
+
+class TestGenerationMetrics:
+    """Tests for GenerationMetrics value object."""
+
+    def test_create_generation_metrics(self) -> None:
+        metrics = model.GenerationMetrics(
+            mean_faithfulness=0.85,
+            mean_answer_relevancy=0.90,
+        )
+
+        assert metrics.mean_faithfulness == 0.85
+        assert metrics.mean_answer_relevancy == 0.90
+
+    def test_immutability(self) -> None:
+        metrics = model.GenerationMetrics(
+            mean_faithfulness=0.85,
+            mean_answer_relevancy=0.90,
+        )
+        with pytest.raises(Exception):
+            metrics.mean_faithfulness = 0.5
+
+
+class TestTestCaseResultGeneration:
+    """Tests for TestCaseResult generation fields."""
+
+    def test_create_with_generation_metrics(self) -> None:
+        case_metrics = model.CaseMetrics(
+            precision=0.33,
+            recall=1.0,
+            hit=True,
+            reciprocal_rank=1.0,
+        )
+        generation_metrics = model.GenerationCaseMetrics(
+            faithfulness=0.85,
+            answer_relevancy=0.90,
+        )
+        result = model.TestCaseResult.create(
+            test_case_id="tc1",
+            retrieved_chunk_ids=("c1", "c2", "c3"),
+            retrieved_scores=(0.9, 0.8, 0.7),
+            metrics=case_metrics,
+            generation_metrics=generation_metrics,
+            generated_answer="AI is artificial intelligence.",
+        )
+
+        assert result.faithfulness == 0.85
+        assert result.answer_relevancy == 0.90
+        assert result.generated_answer == "AI is artificial intelligence."
+
+    def test_create_without_generation_metrics_backward_compat(self) -> None:
+        case_metrics = model.CaseMetrics(
+            precision=0.33,
+            recall=1.0,
+            hit=True,
+            reciprocal_rank=1.0,
+        )
+        result = model.TestCaseResult.create(
+            test_case_id="tc1",
+            retrieved_chunk_ids=("c1",),
+            retrieved_scores=(0.9,),
+            metrics=case_metrics,
+        )
+
+        assert result.faithfulness is None
+        assert result.answer_relevancy is None
+        assert result.generated_answer is None
+
+    def test_generation_fields_are_none_by_default(self) -> None:
+        case_metrics = model.CaseMetrics(
+            precision=0.5,
+            recall=0.5,
+            hit=True,
+            reciprocal_rank=0.5,
+        )
+        result = model.TestCaseResult.create(
+            test_case_id="tc1",
+            retrieved_chunk_ids=("c1",),
+            retrieved_scores=(0.9,),
+            metrics=case_metrics,
+        )
+
+        assert result.generated_answer is None
+        assert result.faithfulness is None
+        assert result.answer_relevancy is None

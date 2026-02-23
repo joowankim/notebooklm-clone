@@ -1,5 +1,6 @@
 """Evaluation command and query handlers."""
 
+import collections
 import logging
 
 from src import exceptions
@@ -8,11 +9,13 @@ from src.chunk.domain import model as chunk_model
 from src.document.adapter import repository as document_repository_module
 from src.document.domain import status as document_status_module
 from src.evaluation.adapter import generator as generator_module
+from src.evaluation.adapter import judge as judge_module
 from src.evaluation.adapter import repository as evaluation_repository_module
 from src.evaluation.domain import metric as metric_module
 from src.evaluation.domain import model
 from src.evaluation.schema import command, response
 from src.notebook.adapter import repository as notebook_repository_module
+from src.query.adapter.pydantic_ai import agent as rag_agent_module
 from src.query.service import retrieval
 
 logger = logging.getLogger(__name__)
@@ -119,10 +122,14 @@ class RunEvaluationHandler:
         dataset_repository: evaluation_repository_module.DatasetRepository,
         run_repository: evaluation_repository_module.RunRepository,
         retrieval_service: retrieval.RetrievalService,
+        rag_agent: rag_agent_module.RAGAgent | None = None,
+        llm_judge: judge_module.LLMJudge | None = None,
     ) -> None:
         self._dataset_repository = dataset_repository
         self._run_repository = run_repository
         self._retrieval_service = retrieval_service
+        self._rag_agent = rag_agent
+        self._llm_judge = llm_judge
 
     async def handle(
         self, dataset_id: str, cmd: command.RunEvaluation
@@ -130,14 +137,29 @@ class RunEvaluationHandler:
         """Run evaluation against a dataset."""
         dataset = await self._load_runnable_dataset(dataset_id)
 
-        run = model.EvaluationRun.create(dataset_id=dataset_id, k=cmd.k)
+        run = model.EvaluationRun.create(
+            dataset_id=dataset_id,
+            k=cmd.k,
+            evaluation_type=cmd.evaluation_type,
+        )
         run = run.mark_running()
         await self._run_repository.save(run)
 
         try:
-            results = await self._evaluate_test_cases(dataset, cmd.k)
-            metrics = self._compute_aggregate_metrics(results, cmd.k)
-            run = run.mark_completed(metrics=metrics, results=tuple(results))
+            generation_metrics = None
+            if cmd.evaluation_type == model.EvaluationType.FULL_RAG:
+                results, generation_metrics = await self._evaluate_full_rag(
+                    dataset, cmd.k,
+                )
+            else:
+                results = await self._evaluate_retrieval_only(dataset, cmd.k)
+
+            retrieval_metrics = self._compute_aggregate_metrics(results, cmd.k)
+            run = run.mark_completed(
+                metrics=retrieval_metrics,
+                results=tuple(results),
+                generation_metrics=generation_metrics,
+            )
             saved = await self._run_repository.save_with_results(run)
             return response.RunDetail.from_entity(saved)
 
@@ -163,10 +185,10 @@ class RunEvaluationHandler:
             )
         return dataset
 
-    async def _evaluate_test_cases(
+    async def _evaluate_retrieval_only(
         self, dataset: model.EvaluationDataset, k: int
     ) -> list[model.TestCaseResult]:
-        """Evaluate each test case against the retrieval service."""
+        """Evaluate each test case with retrieval only."""
         results: list[model.TestCaseResult] = []
 
         for test_case in dataset.test_cases:
@@ -175,18 +197,95 @@ class RunEvaluationHandler:
                 query=test_case.question,
                 max_chunks=k,
             )
-            result = self._evaluate_single_case(test_case, retrieved_chunks, k)
+            result = self._build_retrieval_result(test_case, retrieved_chunks, k)
             results.append(result)
 
         return results
 
+    async def _evaluate_full_rag(
+        self, dataset: model.EvaluationDataset, k: int
+    ) -> tuple[list[model.TestCaseResult], model.GenerationMetrics]:
+        """Evaluate with full RAG pipeline including generation."""
+        if not self._rag_agent or not self._llm_judge:
+            raise exceptions.ValidationError(
+                "RAGAgent and LLMJudge required for FULL_RAG evaluation"
+            )
+
+        results: list[model.TestCaseResult] = []
+        faithfulness_scores: list[float] = []
+        relevancy_scores: list[float] = []
+
+        for test_case in dataset.test_cases:
+            result, faithfulness, relevancy = await self._evaluate_single_rag(
+                dataset.notebook_id, test_case, k,
+            )
+            results.append(result)
+            faithfulness_scores.append(faithfulness)
+            relevancy_scores.append(relevancy)
+
+        mean_f, mean_r = metric_module.aggregate_generation_metrics(
+            faithfulness_scores, relevancy_scores,
+        )
+        generation_metrics = model.GenerationMetrics(
+            mean_faithfulness=mean_f,
+            mean_answer_relevancy=mean_r,
+        )
+        return results, generation_metrics
+
+    async def _evaluate_single_rag(
+        self,
+        notebook_id: str,
+        test_case: model.TestCase,
+        k: int,
+    ) -> tuple[model.TestCaseResult, float, float]:
+        """Evaluate a single test case with full RAG pipeline."""
+        retrieved_chunks = await self._retrieval_service.retrieve(
+            notebook_id=notebook_id,
+            query=test_case.question,
+            max_chunks=k,
+        )
+
+        answer_result = await self._rag_agent.answer(
+            question=test_case.question,
+            retrieved_chunks=retrieved_chunks,
+        )
+
+        context_chunks = [rc.chunk for rc in retrieved_chunks]
+        faithfulness = await self._llm_judge.score_faithfulness(
+            question=test_case.question,
+            answer=answer_result.answer,
+            context_chunks=context_chunks,
+        )
+        relevancy = await self._llm_judge.score_answer_relevancy(
+            question=test_case.question,
+            answer=answer_result.answer,
+        )
+
+        case_metrics = self._compute_case_metrics(
+            test_case, retrieved_chunks, k,
+        )
+        generation_case_metrics = model.GenerationCaseMetrics(
+            faithfulness=faithfulness,
+            answer_relevancy=relevancy,
+        )
+
+        result = model.TestCaseResult.create(
+            test_case_id=test_case.id,
+            retrieved_chunk_ids=tuple(rc.chunk.id for rc in retrieved_chunks),
+            retrieved_scores=tuple(rc.score for rc in retrieved_chunks),
+            metrics=case_metrics,
+            generation_metrics=generation_case_metrics,
+            generated_answer=answer_result.answer,
+        )
+        return result, faithfulness, relevancy
+
     @staticmethod
-    def _evaluate_single_case(
+    def _build_retrieval_result(
         test_case: model.TestCase,
         retrieved_chunks: list[retrieval.RetrievedChunk],
         k: int,
     ) -> model.TestCaseResult:
-        """Evaluate a single test case against retrieved chunks."""
+        """Build a retrieval-only test case result."""
         retrieved_ids = [rc.chunk.id for rc in retrieved_chunks]
         retrieved_scores = [rc.score for rc in retrieved_chunks]
         relevant_ids = set(test_case.ground_truth_chunk_ids)
@@ -203,6 +302,23 @@ class RunEvaluationHandler:
             retrieved_chunk_ids=tuple(retrieved_ids),
             retrieved_scores=tuple(retrieved_scores),
             metrics=case_metrics,
+        )
+
+    @staticmethod
+    def _compute_case_metrics(
+        test_case: model.TestCase,
+        retrieved_chunks: list[retrieval.RetrievedChunk],
+        k: int,
+    ) -> model.CaseMetrics:
+        """Compute retrieval metrics for a single test case."""
+        retrieved_ids = [rc.chunk.id for rc in retrieved_chunks]
+        relevant_ids = set(test_case.ground_truth_chunk_ids)
+
+        return model.CaseMetrics(
+            precision=metric_module.precision_at_k(retrieved_ids, relevant_ids, k),
+            recall=metric_module.recall_at_k(retrieved_ids, relevant_ids, k),
+            hit=metric_module.hit_at_k(retrieved_ids, relevant_ids, k),
+            reciprocal_rank=metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k),
         )
 
     @staticmethod
@@ -248,16 +364,228 @@ class GetRunHandler:
     """Handler for getting run details."""
 
     def __init__(
-        self, run_repository: evaluation_repository_module.RunRepository
+        self,
+        run_repository: evaluation_repository_module.RunRepository,
+        dataset_repository: evaluation_repository_module.DatasetRepository,
     ) -> None:
         self._run_repository = run_repository
+        self._dataset_repository = dataset_repository
 
     async def handle(self, run_id: str) -> response.RunDetail:
         """Get run with results and metrics."""
         run = await self._run_repository.find_by_id(run_id)
         if run is None:
             raise exceptions.NotFoundError(f"Run not found: {run_id}")
-        return response.RunDetail.from_entity(run)
+
+        base_response = response.RunDetail.from_entity(run)
+        difficulty_metrics = await self._compute_difficulty_metrics(run)
+        return base_response.model_copy(
+            update={"metrics_by_difficulty": difficulty_metrics or None},
+        )
+
+    async def _compute_difficulty_metrics(
+        self, run: model.EvaluationRun
+    ) -> list[response.DifficultyMetrics]:
+        """Compute per-difficulty metrics from run results."""
+        dataset = await self._dataset_repository.find_by_id(run.dataset_id)
+        if dataset is None:
+            return []
+
+        difficulty_map = {
+            tc.id: tc.difficulty
+            for tc in dataset.test_cases
+            if tc.difficulty is not None
+        }
+        if not difficulty_map:
+            return []
+
+        return self._aggregate_by_difficulty(run.results, difficulty_map)
+
+    @staticmethod
+    def _aggregate_by_difficulty(
+        results: tuple[model.TestCaseResult, ...],
+        difficulty_map: dict[str, model.QuestionDifficulty],
+    ) -> list[response.DifficultyMetrics]:
+        """Group results by difficulty and compute aggregated metrics."""
+        results_by_difficulty: dict[
+            model.QuestionDifficulty, list[model.TestCaseResult]
+        ] = collections.defaultdict(list)
+
+        for result in results:
+            difficulty = difficulty_map.get(result.test_case_id)
+            if difficulty is not None:
+                results_by_difficulty[difficulty].append(result)
+
+        metrics_list: list[response.DifficultyMetrics] = []
+        for difficulty, group in sorted(
+            results_by_difficulty.items(), key=lambda x: x[0].value
+        ):
+            precisions = [r.precision for r in group]
+            recalls = [r.recall for r in group]
+            hits = [r.hit for r in group]
+            reciprocal_ranks = [r.reciprocal_rank for r in group]
+            mean_p, mean_r, hit_rate, mrr = metric_module.aggregate_metrics(
+                precisions, recalls, hits, reciprocal_ranks,
+            )
+            metrics_list.append(response.DifficultyMetrics(
+                difficulty=difficulty.value,
+                test_case_count=len(group),
+                precision_at_k=mean_p,
+                recall_at_k=mean_r,
+                hit_rate_at_k=hit_rate,
+                mrr=mrr,
+            ))
+        return metrics_list
+
+
+class CompareRunsHandler:
+    """Handler for comparing multiple evaluation runs."""
+
+    def __init__(
+        self,
+        run_repository: evaluation_repository_module.RunRepository,
+        dataset_repository: evaluation_repository_module.DatasetRepository,
+    ) -> None:
+        self._run_repository = run_repository
+        self._dataset_repository = dataset_repository
+
+    async def handle(
+        self, cmd: command.CompareRuns
+    ) -> response.RunComparisonResponse:
+        """Compare multiple evaluation runs."""
+        runs = await self._load_and_validate_runs(cmd.run_ids)
+        dataset = await self._load_dataset(runs[0].dataset_id)
+
+        difficulty_map = {
+            tc.id: tc.difficulty
+            for tc in dataset.test_cases
+            if tc.difficulty is not None
+        }
+
+        aggregate_metrics = [
+            self._build_aggregate_metrics(run) for run in runs
+        ]
+        test_case_comparisons = self._build_test_case_comparisons(
+            runs, dataset.test_cases, difficulty_map,
+        )
+
+        return response.RunComparisonResponse(
+            dataset_id=runs[0].dataset_id,
+            k=runs[0].k,
+            run_count=len(runs),
+            aggregate_metrics=aggregate_metrics,
+            test_case_comparisons=test_case_comparisons,
+        )
+
+    async def _load_and_validate_runs(
+        self, run_ids: list[str]
+    ) -> list[model.EvaluationRun]:
+        """Load runs and validate they can be compared."""
+        runs = await self._run_repository.list_by_ids(run_ids)
+        if len(runs) != len(run_ids):
+            found_ids = {r.id for r in runs}
+            missing = [rid for rid in run_ids if rid not in found_ids]
+            raise exceptions.NotFoundError(
+                f"Runs not found: {', '.join(missing)}"
+            )
+
+        dataset_ids = {r.dataset_id for r in runs}
+        if len(dataset_ids) > 1:
+            raise exceptions.ValidationError(
+                "All runs must belong to the same dataset"
+            )
+
+        incomplete = [r.id for r in runs if r.status != model.RunStatus.COMPLETED]
+        if incomplete:
+            raise exceptions.ValidationError(
+                f"All runs must be completed: {', '.join(incomplete)}"
+            )
+
+        k_values = {r.k for r in runs}
+        if len(k_values) > 1:
+            raise exceptions.ValidationError(
+                "All runs must use the same k value"
+            )
+
+        return runs
+
+    async def _load_dataset(
+        self, dataset_id: str
+    ) -> model.EvaluationDataset:
+        """Load dataset for test case metadata."""
+        dataset = await self._dataset_repository.find_by_id(dataset_id)
+        if dataset is None:
+            raise exceptions.NotFoundError(
+                f"Dataset not found: {dataset_id}"
+            )
+        return dataset
+
+    @staticmethod
+    def _build_aggregate_metrics(
+        run: model.EvaluationRun,
+    ) -> response.RunComparisonMetrics:
+        """Build aggregate metrics for a single run."""
+        return response.RunComparisonMetrics(
+            run_id=run.id,
+            created_at=run.created_at,
+            evaluation_type=run.evaluation_type.value,
+            precision_at_k=run.precision_at_k or 0.0,
+            recall_at_k=run.recall_at_k or 0.0,
+            hit_rate_at_k=run.hit_rate_at_k or 0.0,
+            mrr=run.mrr or 0.0,
+            mean_faithfulness=run.mean_faithfulness,
+            mean_answer_relevancy=run.mean_answer_relevancy,
+        )
+
+    @staticmethod
+    def _build_test_case_comparisons(
+        runs: list[model.EvaluationRun],
+        test_cases: tuple[model.TestCase, ...],
+        difficulty_map: dict[str, model.QuestionDifficulty],
+    ) -> list[response.TestCaseComparison]:
+        """Build per-test-case cross-run comparisons."""
+        tc_map = {tc.id: tc for tc in test_cases}
+
+        all_tc_ids: list[str] = []
+        seen: set[str] = set()
+        for run in runs:
+            for result in run.results:
+                if result.test_case_id not in seen:
+                    all_tc_ids.append(result.test_case_id)
+                    seen.add(result.test_case_id)
+
+        comparisons: list[response.TestCaseComparison] = []
+        for tc_id in all_tc_ids:
+            tc = tc_map.get(tc_id)
+            question = tc.question if tc else ""
+            difficulty = difficulty_map.get(tc_id)
+
+            entries: list[response.TestCaseComparisonEntry] = []
+            for run in runs:
+                result = next(
+                    (r for r in run.results if r.test_case_id == tc_id),
+                    None,
+                )
+                if result is not None:
+                    entries.append(response.TestCaseComparisonEntry(
+                        run_id=run.id,
+                        precision=result.precision,
+                        recall=result.recall,
+                        hit=result.hit,
+                        reciprocal_rank=result.reciprocal_rank,
+                        faithfulness=result.faithfulness,
+                        answer_relevancy=result.answer_relevancy,
+                        generated_answer=result.generated_answer,
+                    ))
+
+            comparisons.append(response.TestCaseComparison(
+                test_case_id=tc_id,
+                question=question,
+                difficulty=difficulty.value if difficulty else None,
+                entries=entries,
+            ))
+
+        return comparisons
 
 
 class ListDatasetsHandler:

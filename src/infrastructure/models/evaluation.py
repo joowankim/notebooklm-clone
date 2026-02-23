@@ -80,6 +80,9 @@ class EvaluationTestCaseSchema(database_module.Base):
     source_chunk_id: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(
         sqlalchemy.String(32), nullable=False
     )
+    difficulty: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.String(20), nullable=True
+    )
     created_at: sqlalchemy.orm.Mapped[datetime.datetime] = sqlalchemy.orm.mapped_column(
         sqlalchemy.DateTime(timezone=True),
         nullable=False,
@@ -122,6 +125,15 @@ class EvaluationRunSchema(database_module.Base):
         sqlalchemy.Float, nullable=True
     )
     mrr: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    evaluation_type: sqlalchemy.orm.Mapped[str] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.String(20), nullable=False, default="retrieval_only"
+    )
+    mean_faithfulness: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    mean_answer_relevancy: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Float, nullable=True
     )
     error_message: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
@@ -181,6 +193,15 @@ class EvaluationTestCaseResultSchema(database_module.Base):
     )
     reciprocal_rank: sqlalchemy.orm.Mapped[float] = sqlalchemy.orm.mapped_column(
         sqlalchemy.Float, nullable=False
+    )
+    generated_answer: sqlalchemy.orm.Mapped[str | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Text, nullable=True
+    )
+    faithfulness: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
+    )
+    answer_relevancy: sqlalchemy.orm.Mapped[float | None] = sqlalchemy.orm.mapped_column(
+        sqlalchemy.Float, nullable=True
     )
 
     run: sqlalchemy.orm.Mapped["EvaluationRunSchema"] = sqlalchemy.orm.relationship(

@@ -7,6 +7,7 @@ import rich.panel
 import rich.table
 import typer
 
+from src import exceptions as exceptions_module
 from src import settings as settings_module
 from src.chunk.adapter import repository as chunk_repository_module
 from src.chunk.adapter.embedding import openai_embedding
@@ -15,10 +16,14 @@ from src.cli import utils as cli_utils
 from src.document.adapter import repository as document_repository_module
 from src.document.domain import status as document_status_module
 from src.evaluation.adapter import generator as generator_module
+from src.evaluation.adapter import judge as judge_module
 from src.evaluation.adapter import repository as evaluation_repository_module
-from src.evaluation.domain import metric as metric_module
 from src.evaluation.domain import model
+from src.evaluation.handler import handlers as handlers_module
+from src.evaluation.schema import command as command_module
+from src.evaluation.schema import response as response_module
 from src.notebook.adapter import repository as notebook_repository_module
+from src.query.adapter.pydantic_ai import agent as rag_agent_module
 from src.query.service import retrieval as retrieval_module
 
 console = rich.console.Console()
@@ -158,35 +163,66 @@ async def _list_datasets(notebook_id: str) -> None:
 def run_evaluation(
     dataset_id: str = typer.Argument(..., help="Dataset ID"),
     k: int = typer.Option(5, "--k", "-k", help="Number of top results to evaluate"),
+    evaluation_type: str = typer.Option(
+        "retrieval_only",
+        "--type",
+        "-t",
+        help="Evaluation type: retrieval_only or full_rag",
+    ),
 ) -> None:
     """Run retrieval evaluation against a dataset."""
-    asyncio.run(_run_evaluation(dataset_id, k))
+    try:
+        eval_type = model.EvaluationType(evaluation_type)
+    except ValueError:
+        console.print(f"[red]Invalid evaluation type: {evaluation_type}[/red]")
+        console.print("  Valid types: retrieval_only, full_rag")
+        raise typer.Exit(1)
+
+    asyncio.run(_run_evaluation(dataset_id, k, eval_type))
 
 
-async def _run_evaluation(dataset_id: str, k: int) -> None:
+async def _run_evaluation(
+    dataset_id: str, k: int, eval_type: model.EvaluationType
+) -> None:
     async with cli_utils.get_session_context() as session:
         dataset_repo = evaluation_repository_module.DatasetRepository(session)
         run_repo = evaluation_repository_module.RunRepository(session)
         retrieval_service = _build_retrieval_service(session)
 
-        dataset = await _load_runnable_dataset(dataset_repo, dataset_id)
-        console.print(f"[yellow]Running evaluation (k={k})...[/yellow]")
-        console.print(f"  Dataset: {dataset.name} ({len(dataset.test_cases)} test cases)")
+        rag_agent = None
+        llm_judge = None
+        if eval_type == model.EvaluationType.FULL_RAG:
+            rag_agent = rag_agent_module.RAGAgent()
+            llm_judge = judge_module.LLMJudge(
+                eval_model=settings_module.settings.eval_model,
+            )
 
-        run = model.EvaluationRun.create(dataset_id=dataset_id, k=k)
-        run = run.mark_running()
-        await run_repo.save(run)
-
-        results = await _evaluate_all_test_cases(
-            dataset, retrieval_service, k
+        handler = handlers_module.RunEvaluationHandler(
+            dataset_repository=dataset_repo,
+            run_repository=run_repo,
+            retrieval_service=retrieval_service,
+            rag_agent=rag_agent,
+            llm_judge=llm_judge,
         )
-        metrics = _compute_metrics(results, k)
 
-        run = run.mark_completed(metrics=metrics, results=tuple(results))
-        await run_repo.save_with_results(run)
+        type_label = "Full RAG" if eval_type == model.EvaluationType.FULL_RAG else "Retrieval"
+        console.print(f"[yellow]Running {type_label} evaluation (k={k})...[/yellow]")
+
+        cmd = command_module.RunEvaluation(k=k, evaluation_type=eval_type)
+        detail = await handler.handle(dataset_id, cmd)
         await session.commit()
 
-        _print_metrics(metrics, run.id)
+        if detail.metrics is not None:
+            metrics = model.RetrievalMetrics(
+                precision_at_k=detail.metrics.precision_at_k,
+                recall_at_k=detail.metrics.recall_at_k,
+                hit_rate_at_k=detail.metrics.hit_rate_at_k,
+                mrr=detail.metrics.mrr,
+                k=detail.metrics.k,
+            )
+            _print_metrics(metrics, detail.id)
+
+        _print_generation_metrics(detail)
 
 
 def _build_retrieval_service(
@@ -218,66 +254,6 @@ async def _load_runnable_dataset(
     return dataset
 
 
-async def _evaluate_all_test_cases(
-    dataset: model.EvaluationDataset,
-    retrieval_service: retrieval_module.RetrievalService,
-    k: int,
-) -> list[model.TestCaseResult]:
-    """Evaluate all test cases and return results."""
-    results: list[model.TestCaseResult] = []
-
-    for i, test_case in enumerate(dataset.test_cases, start=1):
-        console.print(f"  Evaluating {i}/{len(dataset.test_cases)}...", end="\r")
-
-        retrieved_chunks = await retrieval_service.retrieve(
-            notebook_id=dataset.notebook_id,
-            query=test_case.question,
-            max_chunks=k,
-        )
-
-        retrieved_ids = [rc.chunk.id for rc in retrieved_chunks]
-        retrieved_scores = [rc.score for rc in retrieved_chunks]
-        relevant_ids = set(test_case.ground_truth_chunk_ids)
-
-        case_metrics = model.CaseMetrics(
-            precision=metric_module.precision_at_k(retrieved_ids, relevant_ids, k),
-            recall=metric_module.recall_at_k(retrieved_ids, relevant_ids, k),
-            hit=metric_module.hit_at_k(retrieved_ids, relevant_ids, k),
-            reciprocal_rank=metric_module.reciprocal_rank(retrieved_ids, relevant_ids, k),
-        )
-        result = model.TestCaseResult.create(
-            test_case_id=test_case.id,
-            retrieved_chunk_ids=tuple(retrieved_ids),
-            retrieved_scores=tuple(retrieved_scores),
-            metrics=case_metrics,
-        )
-        results.append(result)
-
-    return results
-
-
-def _compute_metrics(
-    results: list[model.TestCaseResult], k: int
-) -> model.RetrievalMetrics:
-    """Compute aggregate metrics from individual results."""
-    precisions = [r.precision for r in results]
-    recalls = [r.recall for r in results]
-    hits = [r.hit for r in results]
-    reciprocal_ranks = [r.reciprocal_rank for r in results]
-
-    mean_p, mean_r, hit_rate, mrr = metric_module.aggregate_metrics(
-        precisions, recalls, hits, reciprocal_ranks
-    )
-
-    return model.RetrievalMetrics(
-        precision_at_k=mean_p,
-        recall_at_k=mean_r,
-        hit_rate_at_k=hit_rate,
-        mrr=mrr,
-        k=k,
-    )
-
-
 @app.command("results")
 def show_results(
     run_id: str = typer.Argument(..., help="Run ID"),
@@ -289,26 +265,36 @@ def show_results(
 async def _show_results(run_id: str) -> None:
     async with cli_utils.get_session_context() as session:
         run_repo = evaluation_repository_module.RunRepository(session)
-        run = await run_repo.find_by_id(run_id)
+        dataset_repo = evaluation_repository_module.DatasetRepository(session)
+        handler = handlers_module.GetRunHandler(
+            run_repository=run_repo,
+            dataset_repository=dataset_repo,
+        )
 
-        if run is None:
+        try:
+            detail = await handler.handle(run_id)
+        except exceptions_module.NotFoundError:
             console.print(f"[red]Run not found:[/red] {run_id}")
             raise typer.Exit(1)
 
-        if run.status != model.RunStatus.COMPLETED:
-            console.print(f"[red]Run not completed (status: {run.status})[/red]")
-            if run.error_message:
-                console.print(f"  Error: {run.error_message}")
+        if detail.status != model.RunStatus.COMPLETED.value:
+            console.print(f"[red]Run not completed (status: {detail.status})[/red]")
+            if detail.error_message:
+                console.print(f"  Error: {detail.error_message}")
             raise typer.Exit(1)
 
-        metrics = model.RetrievalMetrics(
-            precision_at_k=run.precision_at_k or 0.0,
-            recall_at_k=run.recall_at_k or 0.0,
-            hit_rate_at_k=run.hit_rate_at_k or 0.0,
-            mrr=run.mrr or 0.0,
-            k=run.k,
-        )
-        _print_metrics(metrics, run.id)
+        if detail.metrics is not None:
+            metrics = model.RetrievalMetrics(
+                precision_at_k=detail.metrics.precision_at_k,
+                recall_at_k=detail.metrics.recall_at_k,
+                hit_rate_at_k=detail.metrics.hit_rate_at_k,
+                mrr=detail.metrics.mrr,
+                k=detail.metrics.k,
+            )
+            _print_metrics(metrics, detail.id)
+
+        _print_generation_metrics(detail)
+        _print_difficulty_breakdown(detail)
 
 
 def _print_metrics(metrics: model.RetrievalMetrics, run_id: str) -> None:
@@ -329,3 +315,129 @@ def _print_metrics(metrics: model.RetrievalMetrics, run_id: str) -> None:
             border_style="green",
         )
     )
+
+
+def _print_generation_metrics(detail: response_module.RunDetail) -> None:
+    """Print generation quality metrics if available."""
+    if detail.mean_faithfulness is None:
+        return
+
+    panel_content = (
+        f"Faithfulness:       {detail.mean_faithfulness:.4f}\n"
+        f"Answer Relevancy:   {detail.mean_answer_relevancy or 0.0:.4f}"
+    )
+
+    console.print(
+        rich.panel.Panel(
+            panel_content,
+            title="Generation Metrics",
+            border_style="blue",
+        )
+    )
+
+
+@app.command("compare")
+def compare_runs(
+    run_ids: list[str] = typer.Argument(
+        ..., help="Run IDs to compare (2-10 runs)"
+    ),
+) -> None:
+    """Compare multiple evaluation runs side-by-side."""
+    if len(run_ids) < 2:
+        console.print("[red]Must provide at least 2 run IDs[/red]")
+        raise typer.Exit(1)
+    if len(run_ids) > 10:
+        console.print("[red]Cannot compare more than 10 runs[/red]")
+        raise typer.Exit(1)
+
+    asyncio.run(_compare_runs(run_ids))
+
+
+async def _compare_runs(run_ids: list[str]) -> None:
+    async with cli_utils.get_session_context() as session:
+        run_repo = evaluation_repository_module.RunRepository(session)
+        dataset_repo = evaluation_repository_module.DatasetRepository(session)
+
+        handler = handlers_module.CompareRunsHandler(
+            run_repository=run_repo,
+            dataset_repository=dataset_repo,
+        )
+
+        cmd = command_module.CompareRuns(run_ids=run_ids)
+
+        try:
+            comparison = await handler.handle(cmd)
+        except exceptions_module.NotFoundError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        except exceptions_module.ValidationError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+
+        _print_comparison(comparison)
+
+
+def _print_comparison(
+    comparison: response_module.RunComparisonResponse,
+) -> None:
+    """Print run comparison results."""
+    console.print(
+        f"\n[bold]Dataset:[/bold] {comparison.dataset_id}"
+        f"  [bold]k:[/bold] {comparison.k}"
+        f"  [bold]Runs:[/bold] {comparison.run_count}"
+    )
+
+    agg_table = rich.table.Table(title="Aggregate Metrics Comparison")
+    agg_table.add_column("Run ID", style="cyan")
+    agg_table.add_column("Created", style="dim")
+    agg_table.add_column("Type")
+    agg_table.add_column("P@k", style="green")
+    agg_table.add_column("R@k", style="green")
+    agg_table.add_column("Hit@k", style="green")
+    agg_table.add_column("MRR", style="green")
+    agg_table.add_column("Faith.", style="blue")
+    agg_table.add_column("Relev.", style="blue")
+
+    for m in comparison.aggregate_metrics:
+        agg_table.add_row(
+            m.run_id[:8],
+            m.created_at.strftime("%Y-%m-%d %H:%M"),
+            m.evaluation_type,
+            f"{m.precision_at_k:.4f}",
+            f"{m.recall_at_k:.4f}",
+            f"{m.hit_rate_at_k:.4f}",
+            f"{m.mrr:.4f}",
+            f"{m.mean_faithfulness:.4f}" if m.mean_faithfulness else "N/A",
+            f"{m.mean_answer_relevancy:.4f}" if m.mean_answer_relevancy else "N/A",
+        )
+
+    console.print(agg_table)
+    console.print(
+        f"\n[bold]Test Cases Compared:[/bold] {len(comparison.test_case_comparisons)}"
+    )
+
+
+def _print_difficulty_breakdown(detail: response_module.RunDetail) -> None:
+    """Print per-difficulty metrics table if available."""
+    if not detail.metrics_by_difficulty:
+        return
+
+    diff_table = rich.table.Table(title="Metrics by Difficulty")
+    diff_table.add_column("Difficulty")
+    diff_table.add_column("Count")
+    diff_table.add_column("Precision@k")
+    diff_table.add_column("Recall@k")
+    diff_table.add_column("Hit Rate@k")
+    diff_table.add_column("MRR")
+
+    for dm in detail.metrics_by_difficulty:
+        diff_table.add_row(
+            dm.difficulty.upper(),
+            str(dm.test_case_count),
+            f"{dm.precision_at_k:.4f}",
+            f"{dm.recall_at_k:.4f}",
+            f"{dm.hit_rate_at_k:.4f}",
+            f"{dm.mrr:.4f}",
+        )
+
+    console.print(diff_table)
