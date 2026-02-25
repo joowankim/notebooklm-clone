@@ -7,24 +7,14 @@ import rich.panel
 import rich.table
 import typer
 
-from src import exceptions as exceptions_module
 from src import settings as settings_module
-from src.chunk.adapter import repository as chunk_repository_module
-from src.chunk.adapter.embedding import openai_embedding
-from src.chunk.domain import model as chunk_model
+from src.cli import dependencies as deps
 from src.cli import utils as cli_utils
-from src.document.adapter import repository as document_repository_module
-from src.document.domain import status as document_status_module
-from src.evaluation.adapter import generator as generator_module
+from src.cli.error_handling import handle_domain_errors
 from src.evaluation.adapter import judge as judge_module
-from src.evaluation.adapter import repository as evaluation_repository_module
 from src.evaluation.domain import model
-from src.evaluation.handler import handlers as handlers_module
 from src.evaluation.schema import command as command_module
 from src.evaluation.schema import response as response_module
-from src.notebook.adapter import repository as notebook_repository_module
-from src.query.adapter.pydantic_ai import agent as rag_agent_module
-from src.query.service import retrieval as retrieval_module
 
 console = rich.console.Console()
 app = typer.Typer()
@@ -41,79 +31,24 @@ def generate_dataset(
     asyncio.run(_generate_dataset(notebook_id, name, questions, max_chunks))
 
 
+@handle_domain_errors
 async def _generate_dataset(
     notebook_id: str, name: str, questions: int, max_chunks: int
 ) -> None:
     async with cli_utils.get_session_context() as session:
-        notebook_repo = notebook_repository_module.NotebookRepository(session)
-        document_repo = document_repository_module.DocumentRepository(session)
-        chunk_repo = chunk_repository_module.ChunkRepository(session)
-        dataset_repo = evaluation_repository_module.DatasetRepository(session)
-        test_gen = generator_module.SyntheticTestGenerator(
-            eval_model=settings_module.settings.eval_model
-        )
-
-        _verify_notebook_or_exit(await notebook_repo.find_by_id(notebook_id), notebook_id)
-
-        dataset = model.EvaluationDataset.create(
-            notebook_id=notebook_id,
+        handler = deps.build_generate_dataset_handler(session)
+        cmd = command_module.GenerateDataset(
             name=name,
             questions_per_chunk=questions,
             max_chunks_sample=max_chunks,
         )
-        dataset = dataset.mark_generating()
-        await dataset_repo.save(dataset)
-        console.print(f"[yellow]Generating dataset...[/yellow] (id: {dataset.id})")
 
-        all_chunks = await _collect_chunks(document_repo, chunk_repo, notebook_id)
-        test_cases = await test_gen.generate_test_cases(
-            chunks=all_chunks,
-            questions_per_chunk=questions,
-            max_chunks_sample=max_chunks,
-        )
-
-        if not test_cases:
-            dataset = dataset.mark_failed("No test cases generated")
-            await dataset_repo.save(dataset)
-            await session.commit()
-            console.print("[red]Failed to generate any test cases.[/red]")
-            raise typer.Exit(1)
-
-        dataset = dataset.mark_completed(test_cases=tuple(test_cases))
-        await dataset_repo.save_with_test_cases(dataset)
+        console.print("[yellow]Generating dataset...[/yellow]")
+        result = await handler.handle(notebook_id, cmd)
         await session.commit()
 
-        console.print(f"[green]Generated {len(test_cases)} test cases[/green]")
-        console.print(f"  Dataset ID: {dataset.id}")
-
-
-def _verify_notebook_or_exit(notebook: object, notebook_id: str) -> None:
-    """Exit with error if notebook is None."""
-    if notebook is None:
-        console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-        raise typer.Exit(1)
-
-
-async def _collect_chunks(
-    document_repo: document_repository_module.DocumentRepository,
-    chunk_repo: chunk_repository_module.ChunkRepository,
-    notebook_id: str,
-) -> list[chunk_model.Chunk]:
-    """Collect all chunks from completed documents in a notebook."""
-    documents = await document_repo.list_by_status(
-        notebook_id, document_status_module.DocumentStatus.COMPLETED
-    )
-    if not documents:
-        console.print("[red]No completed documents found in notebook.[/red]")
-        raise typer.Exit(1)
-
-    all_chunks = []
-    for doc in documents:
-        chunks = await chunk_repo.list_by_document(doc.id)
-        all_chunks.extend(chunks)
-
-    console.print(f"  Found {len(all_chunks)} chunks from {len(documents)} documents")
-    return all_chunks
+        console.print(f"[green]Generated {result.test_case_count} test cases[/green]")
+        console.print(f"  Dataset ID: {result.id}")
 
 
 @app.command("list")
@@ -124,10 +59,11 @@ def list_datasets(
     asyncio.run(_list_datasets(notebook_id))
 
 
+@handle_domain_errors
 async def _list_datasets(notebook_id: str) -> None:
     async with cli_utils.get_session_context() as session:
-        dataset_repo = evaluation_repository_module.DatasetRepository(session)
-        datasets = await dataset_repo.list_by_notebook(notebook_id)
+        handler = deps.build_list_datasets_handler(session)
+        datasets = await handler.handle(notebook_id)
 
         if not datasets:
             console.print("[yellow]No datasets found.[/yellow]")
@@ -146,13 +82,13 @@ async def _list_datasets(notebook_id: str) -> None:
                 "failed": "red",
                 "generating": "yellow",
                 "pending": "dim",
-            }.get(ds.status.value, "")
+            }.get(ds.status, "")
 
             table.add_row(
                 ds.id,
                 ds.name,
-                f"[{status_style}]{ds.status.value}[/{status_style}]",
-                str(len(ds.test_cases)),
+                f"[{status_style}]{ds.status}[/{status_style}]",
+                str(ds.test_case_count),
                 ds.created_at.strftime("%Y-%m-%d %H:%M"),
             )
 
@@ -181,28 +117,21 @@ def run_evaluation(
     asyncio.run(_run_evaluation(dataset_id, k, eval_type))
 
 
+@handle_domain_errors
 async def _run_evaluation(
     dataset_id: str, k: int, eval_type: model.EvaluationType
 ) -> None:
     async with cli_utils.get_session_context() as session:
-        dataset_repo = evaluation_repository_module.DatasetRepository(session)
-        run_repo = evaluation_repository_module.RunRepository(session)
-        retrieval_service = _build_retrieval_service(session)
-
         rag_agent = None
         llm_judge = None
         if eval_type == model.EvaluationType.FULL_RAG:
-            rag_agent = rag_agent_module.RAGAgent()
+            rag_agent = deps._build_rag_agent()
             llm_judge = judge_module.LLMJudge(
                 eval_model=settings_module.settings.eval_model,
             )
 
-        handler = handlers_module.RunEvaluationHandler(
-            dataset_repository=dataset_repo,
-            run_repository=run_repo,
-            retrieval_service=retrieval_service,
-            rag_agent=rag_agent,
-            llm_judge=llm_judge,
+        handler = deps.build_run_evaluation_handler(
+            session, rag_agent=rag_agent, llm_judge=llm_judge,
         )
 
         type_label = "Full RAG" if eval_type == model.EvaluationType.FULL_RAG else "Retrieval"
@@ -225,35 +154,6 @@ async def _run_evaluation(
         _print_generation_metrics(detail)
 
 
-def _build_retrieval_service(
-    session: object,
-) -> retrieval_module.RetrievalService:
-    """Build retrieval service with required dependencies."""
-    chunk_repo = chunk_repository_module.ChunkRepository(session)
-    document_repo = document_repository_module.DocumentRepository(session)
-    embedding_provider = openai_embedding.OpenAIEmbeddingProvider()
-    return retrieval_module.RetrievalService(
-        chunk_repository=chunk_repo,
-        document_repository=document_repo,
-        embedding_provider=embedding_provider,
-    )
-
-
-async def _load_runnable_dataset(
-    dataset_repo: evaluation_repository_module.DatasetRepository,
-    dataset_id: str,
-) -> model.EvaluationDataset:
-    """Load dataset and verify it is runnable, or exit."""
-    dataset = await dataset_repo.find_by_id(dataset_id)
-    if dataset is None:
-        console.print(f"[red]Dataset not found:[/red] {dataset_id}")
-        raise typer.Exit(1)
-    if not dataset.status.is_runnable:
-        console.print(f"[red]Dataset not ready (status: {dataset.status})[/red]")
-        raise typer.Exit(1)
-    return dataset
-
-
 @app.command("results")
 def show_results(
     run_id: str = typer.Argument(..., help="Run ID"),
@@ -262,20 +162,11 @@ def show_results(
     asyncio.run(_show_results(run_id))
 
 
+@handle_domain_errors
 async def _show_results(run_id: str) -> None:
     async with cli_utils.get_session_context() as session:
-        run_repo = evaluation_repository_module.RunRepository(session)
-        dataset_repo = evaluation_repository_module.DatasetRepository(session)
-        handler = handlers_module.GetRunHandler(
-            run_repository=run_repo,
-            dataset_repository=dataset_repo,
-        )
-
-        try:
-            detail = await handler.handle(run_id)
-        except exceptions_module.NotFoundError:
-            console.print(f"[red]Run not found:[/red] {run_id}")
-            raise typer.Exit(1)
+        handler = deps.build_get_run_handler(session)
+        detail = await handler.handle(run_id)
 
         if detail.status != model.RunStatus.COMPLETED.value:
             console.print(f"[red]Run not completed (status: {detail.status})[/red]")
@@ -295,6 +186,32 @@ async def _show_results(run_id: str) -> None:
 
         _print_generation_metrics(detail)
         _print_difficulty_breakdown(detail)
+
+
+@app.command("compare")
+def compare_runs(
+    run_ids: list[str] = typer.Argument(
+        ..., help="Run IDs to compare (2-10 runs)"
+    ),
+) -> None:
+    """Compare multiple evaluation runs side-by-side."""
+    if len(run_ids) < 2:
+        console.print("[red]Must provide at least 2 run IDs[/red]")
+        raise typer.Exit(1)
+    if len(run_ids) > 10:
+        console.print("[red]Cannot compare more than 10 runs[/red]")
+        raise typer.Exit(1)
+
+    asyncio.run(_compare_runs(run_ids))
+
+
+@handle_domain_errors
+async def _compare_runs(run_ids: list[str]) -> None:
+    async with cli_utils.get_session_context() as session:
+        handler = deps.build_compare_runs_handler(session)
+        cmd = command_module.CompareRuns(run_ids=run_ids)
+        comparison = await handler.handle(cmd)
+        _print_comparison(comparison)
 
 
 def _print_metrics(metrics: model.RetrievalMetrics, run_id: str) -> None:
@@ -334,47 +251,6 @@ def _print_generation_metrics(detail: response_module.RunDetail) -> None:
             border_style="blue",
         )
     )
-
-
-@app.command("compare")
-def compare_runs(
-    run_ids: list[str] = typer.Argument(
-        ..., help="Run IDs to compare (2-10 runs)"
-    ),
-) -> None:
-    """Compare multiple evaluation runs side-by-side."""
-    if len(run_ids) < 2:
-        console.print("[red]Must provide at least 2 run IDs[/red]")
-        raise typer.Exit(1)
-    if len(run_ids) > 10:
-        console.print("[red]Cannot compare more than 10 runs[/red]")
-        raise typer.Exit(1)
-
-    asyncio.run(_compare_runs(run_ids))
-
-
-async def _compare_runs(run_ids: list[str]) -> None:
-    async with cli_utils.get_session_context() as session:
-        run_repo = evaluation_repository_module.RunRepository(session)
-        dataset_repo = evaluation_repository_module.DatasetRepository(session)
-
-        handler = handlers_module.CompareRunsHandler(
-            run_repository=run_repo,
-            dataset_repository=dataset_repo,
-        )
-
-        cmd = command_module.CompareRuns(run_ids=run_ids)
-
-        try:
-            comparison = await handler.handle(cmd)
-        except exceptions_module.NotFoundError as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1)
-        except exceptions_module.ValidationError as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1)
-
-        _print_comparison(comparison)
 
 
 def _print_comparison(

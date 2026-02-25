@@ -1,16 +1,16 @@
 """Notebook CLI commands."""
 
 import asyncio
-from typing import Optional
 
 import rich.console
 import rich.table
 import typer
 
+from src.cli import dependencies as deps
 from src.cli import utils as cli_utils
-from src.common import pagination
-from src.notebook.adapter import repository as notebook_repository_module
-from src.notebook.domain import model
+from src.cli.error_handling import handle_domain_errors
+from src.notebook.schema import command as command_module
+from src.notebook.schema import query as query_module
 
 console = rich.console.Console()
 app = typer.Typer()
@@ -19,23 +19,24 @@ app = typer.Typer()
 @app.command("create")
 def create_notebook(
     name: str = typer.Argument(..., help="Name of the notebook"),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Description"),
+    description: str | None = typer.Option(None, "--description", "-d", help="Description"),
 ) -> None:
     """Create a new notebook."""
     asyncio.run(_create_notebook(name, description))
 
 
-async def _create_notebook(name: str, description: Optional[str]) -> None:
+@handle_domain_errors
+async def _create_notebook(name: str, description: str | None) -> None:
     async with cli_utils.get_session_context() as session:
-        repository = notebook_repository_module.NotebookRepository(session)
-        notebook = model.Notebook.create(name=name, description=description)
-        saved = await repository.save(notebook)
+        handler = deps.build_create_notebook_handler(session)
+        cmd = command_module.CreateNotebook(name=name, description=description)
+        result = await handler.handle(cmd)
         await session.commit()
 
-        console.print(f"[green]Created notebook:[/green] {saved.id}")
-        console.print(f"  Name: {saved.name}")
-        if saved.description:
-            console.print(f"  Description: {saved.description}")
+        console.print(f"[green]Created notebook:[/green] {result.id}")
+        console.print(f"  Name: {name}")
+        if description:
+            console.print(f"  Description: {description}")
 
 
 @app.command("list")
@@ -47,10 +48,12 @@ def list_notebooks(
     asyncio.run(_list_notebooks(page, size))
 
 
+@handle_domain_errors
 async def _list_notebooks(page: int, size: int) -> None:
     async with cli_utils.get_session_context() as session:
-        repository = notebook_repository_module.NotebookRepository(session)
-        result = await repository.list(pagination.ListQuery(page=page, size=size))
+        handler = deps.build_list_notebooks_handler(session)
+        qry = query_module.ListNotebooks(page=page, size=size)
+        result = await handler.handle(qry)
 
         if not result.items:
             console.print("[yellow]No notebooks found.[/yellow]")
@@ -82,20 +85,17 @@ def get_notebook(
     asyncio.run(_get_notebook(notebook_id))
 
 
+@handle_domain_errors
 async def _get_notebook(notebook_id: str) -> None:
     async with cli_utils.get_session_context() as session:
-        repository = notebook_repository_module.NotebookRepository(session)
-        notebook = await repository.find_by_id(notebook_id)
+        handler = deps.build_get_notebook_handler(session)
+        detail = await handler.handle(notebook_id)
 
-        if notebook is None:
-            console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-            raise typer.Exit(1)
-
-        console.print(f"[bold]Notebook:[/bold] {notebook.id}")
-        console.print(f"  Name: {notebook.name}")
-        console.print(f"  Description: {notebook.description or '-'}")
-        console.print(f"  Created: {notebook.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        console.print(f"  Updated: {notebook.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"[bold]Notebook:[/bold] {detail.id}")
+        console.print(f"  Name: {detail.name}")
+        console.print(f"  Description: {detail.description or '-'}")
+        console.print(f"  Created: {detail.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"  Updated: {detail.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 @app.command("delete")
@@ -113,14 +113,11 @@ def delete_notebook(
     asyncio.run(_delete_notebook(notebook_id))
 
 
+@handle_domain_errors
 async def _delete_notebook(notebook_id: str) -> None:
     async with cli_utils.get_session_context() as session:
-        repository = notebook_repository_module.NotebookRepository(session)
-        deleted = await repository.delete(notebook_id)
+        handler = deps.build_delete_notebook_handler(session)
+        await handler.handle(notebook_id)
         await session.commit()
 
-        if deleted:
-            console.print(f"[green]Deleted notebook:[/green] {notebook_id}")
-        else:
-            console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-            raise typer.Exit(1)
+        console.print(f"[green]Deleted notebook:[/green] {notebook_id}")

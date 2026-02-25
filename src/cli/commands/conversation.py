@@ -8,7 +8,11 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+from src.cli import dependencies as deps
+from src.cli.error_handling import handle_domain_errors
 from src.cli.utils import get_session_context
+from src.conversation.schema import command as command_module
+from src.conversation.schema import query as query_module
 
 console = Console()
 app = typer.Typer()
@@ -23,37 +27,15 @@ def create_conversation(
     asyncio.run(_create_conversation(notebook_id, title))
 
 
+@handle_domain_errors
 async def _create_conversation(notebook_id: str, title: str | None):
-    from src.conversation.adapter.repository import ConversationRepository
-    from src.conversation.domain.model import Conversation
-    from src.notebook.adapter.repository import NotebookRepository
-    import datetime
-    import uuid
-
     async with get_session_context() as session:
-        # Verify notebook exists
-        notebook_repo = NotebookRepository(session)
-        notebook = await notebook_repo.find_by_id(notebook_id)
-        if notebook is None:
-            console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-            raise typer.Exit(1)
-
-        # Create conversation
-        now = datetime.datetime.now(datetime.timezone.utc)
-        conversation = Conversation(
-            id=uuid.uuid4().hex,
-            notebook_id=notebook_id,
-            title=title,
-            messages=(),
-            created_at=now,
-            updated_at=now,
-        )
-
-        conversation_repo = ConversationRepository(session)
-        await conversation_repo.save(conversation)
+        handler = deps.build_create_conversation_handler(session)
+        cmd = command_module.CreateConversation(title=title)
+        result = await handler.handle(notebook_id, cmd)
         await session.commit()
 
-        console.print(f"[green]Conversation created:[/green] {conversation.id}")
+        console.print(f"[green]Conversation created:[/green] {result.id}")
         if title:
             console.print(f"  Title: {title}")
 
@@ -68,31 +50,18 @@ def list_conversations(
     asyncio.run(_list_conversations(notebook_id, page, size))
 
 
+@handle_domain_errors
 async def _list_conversations(notebook_id: str, page: int, size: int):
-    from src.common import ListQuery
-    from src.conversation.adapter.repository import ConversationRepository
-    from src.notebook.adapter.repository import NotebookRepository
-
     async with get_session_context() as session:
-        # Verify notebook exists
-        notebook_repo = NotebookRepository(session)
-        notebook = await notebook_repo.find_by_id(notebook_id)
-        if notebook is None:
-            console.print(f"[red]Notebook not found:[/red] {notebook_id}")
-            raise typer.Exit(1)
-
-        # List conversations
-        conversation_repo = ConversationRepository(session)
-        result = await conversation_repo.list_by_notebook(
-            notebook_id=notebook_id,
-            query=ListQuery(page=page, size=size),
-        )
+        handler = deps.build_list_conversations_handler(session)
+        qry = query_module.ListConversations(notebook_id=notebook_id, page=page, size=size)
+        result = await handler.handle(qry)
 
         if not result.items:
             console.print("[dim]No conversations found.[/dim]")
             return
 
-        table = Table(title=f"Conversations for '{notebook.name}'")
+        table = Table(title="Conversations")
         table.add_column("ID", style="cyan")
         table.add_column("Title", style="green")
         table.add_column("Messages", justify="right")
@@ -119,99 +88,30 @@ def chat_in_conversation(
     asyncio.run(_chat_in_conversation(conversation_id, message))
 
 
+@handle_domain_errors
 async def _chat_in_conversation(conversation_id: str, message: str):
-    import datetime
-    import uuid
-
-    from src.chunk.adapter.embedding.openai_embedding import OpenAIEmbeddingProvider
-    from src.chunk.adapter.repository import ChunkRepository
-    from src.conversation.adapter.repository import ConversationRepository
-    from src.conversation.domain.model import Message, MessageRole
-    from src.document.adapter.repository import DocumentRepository
-    from src.query.adapter.pydantic_ai.agent import RAGAgent
-    from src.query.service.retrieval import RetrievalService
-
     async with get_session_context() as session:
-        # Get conversation
-        conversation_repo = ConversationRepository(session)
-        conversation = await conversation_repo.find_by_id(conversation_id)
-        if conversation is None:
-            console.print(f"[red]Conversation not found:[/red] {conversation_id}")
-            raise typer.Exit(1)
-
-        now = datetime.datetime.now(datetime.timezone.utc)
-
-        # Create user message
-        user_message = Message(
-            id=uuid.uuid4().hex,
-            role=MessageRole.USER,
-            content=message,
-            citations=None,
-            created_at=now,
-        )
-
-        # Add user message to conversation
-        conversation = conversation.add_message(user_message)
-        await conversation_repo.add_message(conversation_id, user_message)
-
-        # Update conversation title if needed
-        if len(conversation.messages) == 1:
-            await conversation_repo.save(conversation)
+        handler = deps.build_send_message_handler(session)
+        cmd = command_module.SendMessage(content=message)
 
         console.print(f"[blue]You:[/blue] {message}\n")
         console.print("[dim]Generating response...[/dim]\n")
 
-        # Get conversation context for RAG
-        conversation_context = conversation.get_context_for_rag(max_turns=5)
-
-        # Set up services
-        chunk_repo = ChunkRepository(session)
-        doc_repo = DocumentRepository(session)
-        embedding_provider = OpenAIEmbeddingProvider()
-        retrieval_service = RetrievalService(
-            chunk_repository=chunk_repo,
-            document_repository=doc_repo,
-            embedding_provider=embedding_provider,
-        )
-        rag_agent = RAGAgent()
-
-        # Retrieve relevant chunks
-        retrieved = await retrieval_service.retrieve(
-            notebook_id=conversation.notebook_id,
-            query=message,
-            max_chunks=10,
-        )
-
-        # Generate answer with conversation context
-        answer = await rag_agent.answer(
-            question=message,
-            retrieved_chunks=retrieved,
-            conversation_history=conversation_context[:-1],
-        )
-
-        # Create assistant message
-        assistant_message = Message(
-            id=uuid.uuid4().hex,
-            role=MessageRole.ASSISTANT,
-            content=answer.answer,
-            citations=[c.model_dump() for c in answer.citations] if answer.citations else None,
-            created_at=datetime.datetime.now(datetime.timezone.utc),
-        )
-
-        # Add assistant message
-        await conversation_repo.add_message(conversation_id, assistant_message)
+        result = await handler.handle(conversation_id, cmd)
         await session.commit()
 
-        # Display answer
-        console.print(Panel(Markdown(answer.answer), title="Assistant", border_style="green"))
+        console.print(Panel(
+            Markdown(result.assistant_message.content),
+            title="Assistant",
+            border_style="green",
+        ))
 
-        # Display citations
-        if answer.citations:
+        if result.assistant_message.citations:
             console.print("\n[bold]Citations:[/bold]")
-            for citation in answer.citations:
+            for citation in result.assistant_message.citations:
                 console.print(
-                    f"  [{citation.citation_index}] "
-                    f"[cyan]{citation.document_title or 'Untitled'}[/cyan]"
+                    f"  [{citation.get('citation_index', '?')}] "
+                    f"[cyan]{citation.get('document_title', 'Untitled')}[/cyan]"
                 )
 
 
@@ -223,27 +123,23 @@ def show_conversation(
     asyncio.run(_show_conversation(conversation_id))
 
 
+@handle_domain_errors
 async def _show_conversation(conversation_id: str):
-    from src.conversation.adapter.repository import ConversationRepository
-
     async with get_session_context() as session:
-        conversation_repo = ConversationRepository(session)
-        conversation = await conversation_repo.find_by_id(conversation_id)
-        if conversation is None:
-            console.print(f"[red]Conversation not found:[/red] {conversation_id}")
-            raise typer.Exit(1)
+        handler = deps.build_get_conversation_handler(session)
+        detail = await handler.handle(conversation_id)
 
         console.print(Panel(
-            f"[bold]{conversation.title or 'Untitled Conversation'}[/bold]\n"
-            f"ID: {conversation.id}\n"
-            f"Created: {conversation.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-            f"Messages: {len(conversation.messages)}",
+            f"[bold]{detail.title or 'Untitled Conversation'}[/bold]\n"
+            f"ID: {detail.id}\n"
+            f"Created: {detail.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+            f"Messages: {len(detail.messages)}",
             title="Conversation",
             border_style="blue",
         ))
 
-        for msg in conversation.messages:
-            if msg.role.value == "user":
+        for msg in detail.messages:
+            if msg.role == "user":
                 console.print(f"\n[blue]You:[/blue] {msg.content}")
             else:
                 console.print(Panel(
@@ -259,27 +155,19 @@ def delete_conversation(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
     """Delete a conversation."""
-    asyncio.run(_delete_conversation(conversation_id, force))
+    if not force:
+        confirm = typer.confirm(f"Delete conversation {conversation_id}?")
+        if not confirm:
+            raise typer.Abort()
+
+    asyncio.run(_delete_conversation(conversation_id))
 
 
-async def _delete_conversation(conversation_id: str, force: bool):
-    from src.conversation.adapter.repository import ConversationRepository
-
+@handle_domain_errors
+async def _delete_conversation(conversation_id: str):
     async with get_session_context() as session:
-        conversation_repo = ConversationRepository(session)
-        conversation = await conversation_repo.find_by_id(conversation_id)
-        if conversation is None:
-            console.print(f"[red]Conversation not found:[/red] {conversation_id}")
-            raise typer.Exit(1)
-
-        if not force:
-            confirm = typer.confirm(
-                f"Delete conversation '{conversation.title or 'Untitled'}'?"
-            )
-            if not confirm:
-                raise typer.Abort()
-
-        await conversation_repo.delete(conversation_id)
+        handler = deps.build_delete_conversation_handler(session)
+        await handler.handle(conversation_id)
         await session.commit()
 
         console.print(f"[green]Conversation deleted:[/green] {conversation_id}")
