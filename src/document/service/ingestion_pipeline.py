@@ -3,12 +3,12 @@
 import asyncio
 import logging
 
-from src.chunk.adapter.embedding import port as embedding_port
-from src.chunk.adapter import repository as chunk_repository_module
-from src.chunk.domain import model as chunk_model
 from src import database as database_module
-from src.document.adapter.extractor import port as extractor_port
+from src.chunk.adapter import repository as chunk_repository_module
+from src.chunk.adapter.embedding import port as embedding_port
+from src.chunk.domain import model as chunk_model
 from src.document.adapter import repository as document_repository_module
+from src.document.adapter.extractor import port as extractor_port
 from src.document.domain import model
 from src.document.service.chunking import service as chunking_service_module
 
@@ -170,6 +170,11 @@ class BackgroundIngestionService:
             logger.error(f"Background ingestion error for {document_id}: {e}")
         finally:
             self._tasks.pop(document_id, None)
+
+    async def wait_for_all(self) -> None:
+        """Wait for all pending ingestion tasks to complete."""
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
 
     def is_processing(self, document_id: str) -> bool:
         """Check if a document is currently being processed."""

@@ -176,6 +176,11 @@ class BackgroundCrawlService:
         finally:
             self._tasks.pop(crawl_job_id, None)
 
+    async def wait_for_all(self) -> None:
+        """Wait for all pending crawl tasks to complete."""
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+
     def is_crawling(self, crawl_job_id: str) -> bool:
         """Check if a crawl job is currently running."""
         return crawl_job_id in self._tasks
